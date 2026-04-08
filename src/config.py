@@ -9,3 +9,7 @@ class Config:
     VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN")
     SECRET_KEY = os.environ.get("FLASK_SECRET_KEY", "dev-fallback-key")
     DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///bot.db")
+    #twilio
+    TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
+    TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
+    TWILIO_SANDBOX_NUMBER = os.environ.get("TWILIO_SANDBOX_NUMBER", "whatsapp:+14155238886")
