@@ -1,6 +1,8 @@
 from flask import Blueprint, jsonify, request                     
 import logging #modulo padrão de python para logs
 from config import Config
+from webhook.whatsapp_service import send_message
+from webhook.templates import receive_initial_message
 
 # Configura o sistema de logs para mostrar data/hora, nível e mensagem
 logging.basicConfig(
@@ -36,7 +38,7 @@ def verify():
     # .get("chave") retorna o valor ou None se não existir
     # hub é o hub da meta
     mode = request.args.get("hub.mode")
-    token = requests.args.get("hub.verify_token")
+    token = request.args.get("hub.verify_token")
     challenge = request.args.get("hub.challenge")
     
     logger.info(f"Verificação recebida - mode: {mode}, token: {token}")
@@ -52,15 +54,15 @@ def verify():
         # 403 significa "Forbidden" — acesso negado
         return "Token inválido", 403
 
+"""
 @webhook_bp.route("/webhook", methods=["POST"])
 def receive():
-    """
-    A meta envia isso toda vez que alguem manda mensagem.
-    Os dados chegam no corpo da requisição em formato JSON.
-    """
+    #A meta envia isso toda vez que alguem manda mensagem.
+    #Os dados chegam no corpo da requisição em formato JSON.
+
     # request.get_json() lê o corpo da requisição e converte o JSON em dicionário Python
     # Se o corpo não for JSON válido, retorna None
-    data = request.json()
+    data = request.get_json() 
     
     logger.info(f"Payload recebido: {data}")
     
@@ -85,7 +87,7 @@ def receive():
         # So we verify if it's messages
         
         if "messages" in value:
-            message = value["message"][0]
+            message = value["messages"][0]
 
             # the number of the sender comes in the internacional format without the +
             # ex: "5521999999999"
@@ -95,7 +97,10 @@ def receive():
             #we only treat text at the moment
             if message["type"] == "text":
                 text = message["text"]["body"]
-                logger.info(f"Meensagem de {sender}: {sender}")
+                logger.info(f"Mensagem de {sender}: {text}")
+            elif message["type"] == "audio":
+                audio = message["audio"]
+                logger.error(f"Tipo de mensagem não suportado: {message['type']}")
                 
     except (KeyError, IndexError) as e:
         # KeyError: tentou acessar uma chave que não existe no dicionário
@@ -106,14 +111,64 @@ def receive():
      
      
     return jsonify({"status": "Ok"}), 200
+"""
+
+@webhook_bp.route("/webhook", methods=["POST"])
+def receive_twilio():
+    """
+    O Twilio envia os dados como form data, não como JSON.
+    Form data é o mesmo formato que um formulário HTML usa ao ser submetido.
+    No Flask, acessamos via request.form.get("campo")
+    """
+
+    # request.form é um dicionário com os campos enviados pelo Twilio
+    # .get("Campo") retorna o valor ou None se não existir
+    # Twilio usa letra maiúscula nos campos: "From", "Body", "To"
+    sender = request.form.get("From")  # ex: "whatsapp:+5521999999999"
+    body   = request.form.get("Body")  # texto da mensagem
+    to     = request.form.get("To")    # seu número do sandbox
+
+    logger.info(f"Mensagem recebida de {sender}: {body}")
+
+    # Verifica se os campos essenciais chegaram
+    if not sender or not body:
+        logger.warning("Payload incompleto — From ou Body ausente")
+        
+        
+        return jsonify({"error": "Payload inválido"}), 400
+
+    # Limpa o número do remetente
+    # O Twilio envia "whatsapp:+5521999999999"
+    # Precisamos só do número: "5521999999999"
+    # .replace() substitui uma substring por outra
+    # "whatsapp:+" vira "" (string vazia), sobrando só os dígitos
+    numero_limpo = sender.replace("whatsapp:+", "")
+
+    logger.info(f"Número limpo: {numero_limpo} | Mensagem: {body }")
+
+    # Test to see the message received and use the template to create a response
+    answer = receive_initial_message(body)
+    if not answer:
+        logger.info("Nenhuma resposta gerada para a mensagem recebida.")
+        
+    send_message(numero_limpo, answer)
     
+    return jsonify({"status": "ok"}), 200
+   
+    
+    send_message(numero_limpo, answer)
+
+    # O Twilio espera status 200 para confirmar que você recebeu
+    # Se não receber 200, ele tenta reenviar
+    return jsonify({"status": "ok"}), 200
 
 @webhook_bp.route("/", methods=["GET"])
 def initial_message():
     return "<p>Started the mercadinho bot server</p>"
 
 
-@webhook_bp.route("/health", methods=["GET"])
-def health():
+@webhook_bp.route("/status", methods=["GET"])
+def status():
     #Verificando Status
     return jsonify({"status": "online", "bot": "mercadinho"}), 200
+
