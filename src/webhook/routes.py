@@ -1,8 +1,10 @@
 from flask import Blueprint, jsonify, request                     
 import logging #modulo padrão de python para logs
 from config import Config
-from webhook.whatsapp_service import send_message
+from whatsapp.whatsapp_service import send_message
 from webhook.templates import receive_initial_message
+from bot.handlers import handle_message
+from bot.states import State
 
 # Configura o sistema de logs para mostrar data/hora, nível e mensagem
 logging.basicConfig(
@@ -16,6 +18,15 @@ logger = logging.getLogger(__name__)
 
 # __name__ diz ao Flask onde esse blueprint está localizado (para encontrar templates, etc)
 webhook_bp = Blueprint("webhook", __name__)
+
+# Sessões em memória — dicionário que guarda o estado de cada conversa
+# A chave é o número do cliente, o valor é o dicionário de sessão
+# Ex: {"5521999999999": {"estado": "menu_principal", "carrinho": []}}
+# ⚠️ Isso é temporário — no Módulo 4 vai para o banco de dados
+sections = {}
+
+#Inicia a classe state
+
 
 @webhook_bp.route("/webhook", methods=["GET"])
 def verify():
@@ -122,8 +133,7 @@ def receive_twilio():
     """
 
     # request.form é um dicionário com os campos enviados pelo Twilio
-    # .get("Campo") retorna o valor ou None se não existir
-    # Twilio usa letra maiúscula nos campos: "From", "Body", "To"
+    # .get("Campo") retorna o valor ou None se não existir - Twilio usa letra maiúscula nos campos: "From", "Body", "To"
     sender = request.form.get("From")  # ex: "whatsapp:+5521999999999"
     body   = request.form.get("Body")  # texto da mensagem
     to     = request.form.get("To")    # seu número do sandbox
@@ -133,31 +143,28 @@ def receive_twilio():
     # Verifica se os campos essenciais chegaram
     if not sender or not body:
         logger.warning("Payload incompleto — From ou Body ausente")
-        
-        
         return jsonify({"error": "Payload inválido"}), 400
 
-    # Limpa o número do remetente
-    # O Twilio envia "whatsapp:+5521999999999"
-    # Precisamos só do número: "5521999999999"
-    # .replace() substitui uma substring por outra
-    # "whatsapp:+" vira "" (string vazia), sobrando só os dígitos
-    numero_limpo = sender.replace("whatsapp:+", "")
 
-    logger.info(f"Número limpo: {numero_limpo} | Mensagem: {body }")
+    # O Twilio envia "whatsapp:+5521999999999" Precisamos só do número: "5521999999999" 
+    # Limpa o número do remetente - .replace() substitui uma substring por outra — aqui removemos "whatsapp:+" 
+    clean_number = sender.replace("whatsapp:+", "")
+    logger.info(f"Número limpo: {clean_number} | Mensagem: {body }")
 
-    # Test to see the message received and use the template to create a response
-    answer = receive_initial_message(body)
-    if not answer:
-        logger.info("Nenhuma resposta gerada para a mensagem recebida.")
-        
-    send_message(numero_limpo, answer)
+    # Find the existing section
+    # .setdefault() return the value if the key exist or creates the key with the default value 
+    section = sections.setdefault(clean_number, {
+        "state": State.MAIN_MENU, #estado inicial é o menu principal
+        "cart": [],
+        })
     
-    return jsonify({"status": "ok"}), 200
-   
+    # Delegate the handling of the message to the bot logic
+    # O routes.py don't know nothing about the menu or the products
+    section_updated = handle_message(clean_number, body, section)
     
-    send_message(numero_limpo, answer)
-
+    # Save the state
+    sections[clean_number] = section_updated
+    
     # O Twilio espera status 200 para confirmar que você recebeu
     # Se não receber 200, ele tenta reenviar
     return jsonify({"status": "ok"}), 200
