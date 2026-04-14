@@ -151,20 +151,10 @@ def receive_twilio():
     clean_number = sender.replace("whatsapp:+", "")
     logger.info(f"Número limpo: {clean_number} | Mensagem: {body }")
 
-    # Find the existing section
-    # .setdefault() return the value if the key exist or creates the key with the default value 
-    section = sections.setdefault(clean_number, {
-        "state": State.MAIN_MENU, #estado inicial é o menu principal
-        "cart": [],
-        })
-    
     # Delegate the handling of the message to the bot logic
     # O routes.py don't know nothing about the menu or the products
-    section_updated = handle_message(clean_number, body, section)
-    
-    # Save the state
-    sections[clean_number] = section_updated
-    
+    handle_message(clean_number, body)
+
     # O Twilio espera status 200 para confirmar que você recebeu
     # Se não receber 200, ele tenta reenviar
     return jsonify({"status": "ok"}), 200

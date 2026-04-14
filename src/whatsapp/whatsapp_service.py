@@ -4,7 +4,7 @@ import logging
 
 logger  = logging.getLogger(__name__)
 
-def get_client():
+def get_client() -> Client:
     """
     Creates the client for twilio using the account SID and auth token from the config.
     Makes it to simulate the client in future tests.
@@ -31,6 +31,7 @@ def send_message(to: str, text: str) -> str:
             from_ = Config.TWILIO_SANDBOX_NUMBER,
             to = f"whatsapp:+{to}"
         )
+        logger.info(f"Message sent to {to}: {text} | SID: {message.sid}")
         return message.sid
     except Exception as e:
         #All the erros of twilio will be catched here, and we can log them for future debugging.
@@ -71,7 +72,7 @@ def send_category(to: str, category: str, products: list) -> str:
         products (list): The list of products to be sent. ex: [{"name": "Banana", "price": 3.50}]
     """
     
-    lines = [f"*{category}*\n"]
+    lines: list[str] = [f"*{category}*\n"]
     
     for i, product in enumerate(products, start=1):
         line = f"{i}. {product['name']} - R$ {product['price']:.2f}"

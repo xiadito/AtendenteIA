@@ -1,9 +1,11 @@
 from enum import Enum
 
 class State (Enum):
+    INITIAL = "initial"
     MAIN_MENU = "main_menu"
     CHOSING_PRODUCT = "chosing_product"
     WAITING_ACTION = "waiting_action"
+    FINALIZING_ORDER = "finalizing_order"
     ATTENDANT = "attendant"
     
     def __str__(self):
