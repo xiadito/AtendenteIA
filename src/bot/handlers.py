@@ -66,8 +66,8 @@ def _handle_fallback(sender: str, _session: dict) -> None:
         sender (str): number of the user that sent the message.
         _session (dict): the session data of the client.
     """
-
-    logger.warning(f"[{sender}] Estado desconhecido: {state}. Resetando a conversa.")
+    current_state: str = _session.get("state", "unknown")
+    logger.warning(f"[{sender}] Estado desconhecido: {current_state}. Resetando a conversa.")
     whatsapp_service.send_main_menu(sender)
     _session["state"] = State.INITIAL.value
     _session["current_category"] = None
@@ -215,7 +215,6 @@ def _handle_attendant(sender: str, _session: dict) -> None:
     """
     whatsapp_service.send_attendant(sender)
     _session["state"] = State.ATTENDANT.value
-    whatsapp_service.send_message(sender)
     
     session.save_session(sender, _session) # save the session with the new state.
     
