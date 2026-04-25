@@ -9,7 +9,7 @@ def create_app():
     # Register blueprints (modulos de rota)
     app.register_blueprint(webhook_bp)
     
-    print("hello, world!")
+    print("App created")
     return app
 
 if __name__ == "__main__":
