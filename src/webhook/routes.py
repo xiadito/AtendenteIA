@@ -3,8 +3,7 @@ import logging #modulo padrão de python para logs
 from config import Config
 from whatsapp.whatsapp_service import send_message
 from webhook.templates import receive_initial_message
-from bot.handlers import handle_message
-from bot.states import State
+from bot.handlers import handle_text_message
 
 # Configura o sistema de logs para mostrar data/hora, nível e mensagem
 logging.basicConfig(
@@ -125,7 +124,7 @@ def receive():
 """
 
 @webhook_bp.route("/webhook", methods=["POST"])
-def receive_twilio():
+def receive_twilio() -> tuple:
     """
     O Twilio envia os dados como form data, não como JSON.
     Form data é o mesmo formato que um formulário HTML usa ao ser submetido.
@@ -134,9 +133,9 @@ def receive_twilio():
 
     # request.form é um dicionário com os campos enviados pelo Twilio
     # .get("Campo") retorna o valor ou None se não existir - Twilio usa letra maiúscula nos campos: "From", "Body", "To"
-    sender = request.form.get("From")  # ex: "whatsapp:+5521999999999"
-    body   = request.form.get("Body")  # texto da mensagem
-    to     = request.form.get("To")    # seu número do sandbox
+    sender: str = request.form.get("From")  # ex: "whatsapp:+5521999999999"
+    body: str   = request.form.get("Body")  # texto da mensagem
+    to: str     = request.form.get("To")    # seu número do sandbox
 
     logger.info(f"Mensagem recebida de {sender}: {body}")
 
@@ -146,14 +145,15 @@ def receive_twilio():
         return jsonify({"error": "Payload inválido"}), 400
 
 
-    # O Twilio envia "whatsapp:+5521999999999" Precisamos só do número: "5521999999999" 
-    # Limpa o número do remetente - .replace() substitui uma substring por outra — aqui removemos "whatsapp:+" 
+    # Twilio sends "whatsapp:+5521999999999" we only need the numbers: "5521999999999" 
+    # cleans the sender number - .replace() replace one substring for another — here we remove "whatsapp:+" 
     clean_number = sender.replace("whatsapp:+", "")
     logger.info(f"Número limpo: {clean_number} | Mensagem: {body }")
 
-    # Delegate the handling of the message to the bot logic
-    # O routes.py don't know nothing about the menu or the products
-    handle_message(clean_number, body)
+    # Delegate the handling of the message to the AI
+    # The routes.py don't know nothing about the menu or the products
+    if sender and body:
+        handle_text_message(clean_number, body)
 
     # O Twilio espera status 200 para confirmar que você recebeu
     # Se não receber 200, ele tenta reenviar

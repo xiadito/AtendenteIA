@@ -1,5 +1,4 @@
 import logging
-from bot.states import State
 
 logger = logging.getLogger(__name__)
 
@@ -7,27 +6,19 @@ logger = logging.getLogger(__name__)
 #Key: client number, Value: session data (dict)
 # this will be replaced by a database
 _sessions: dict[str, dict] = {}
-default_session = {
-    "state": State.INITIAL.value,
-    "cart": [],
-    "current_category": None,
-    "customer_name": None,
-    "last_text": None,
-}
-
 def get_session(sender: str) -> dict:
     """_summary_
-        This function is responsible for getting the session of a client. 
+        This function is responsible for getting the session of a client.
         If the session doesn't exist, it creates a default session for the client.
     Args:
         sender (str): Customer number in the format "5521999999999"
     Returns:
         dict: Session data for the client, including state, cart, current category, etc.
     """
-    
+
     if sender not in _sessions:
         logger.info(f"New session created for sender: {sender}")
-        _sessions[sender]: dict = default_session.copy()  # Use copy to avoid mutating the default session
+        _sessions[sender]: dict = {"history": []}  # fresh list per user
     
     return _sessions[sender]
 
