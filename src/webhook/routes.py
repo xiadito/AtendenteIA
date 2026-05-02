@@ -1,9 +1,13 @@
-from flask import Blueprint, jsonify, request                     
-import logging #modulo padrão de python para logs
+from flask import Blueprint, jsonify, request, render_template, redirect, url_for, session 
+from functools import wraps      
 from config import Config
+import logging #modulo padrão de python para logs
 from whatsapp.whatsapp_service import send_message
 from webhook.templates import receive_initial_message
 from bot.handlers import handle_text_message
+import bot.session as store
+from templates import login 
+
 
 # Configura o sistema de logs para mostrar data/hora, nível e mensagem
 logging.basicConfig(
@@ -17,14 +21,6 @@ logger = logging.getLogger(__name__)
 
 # __name__ diz ao Flask onde esse blueprint está localizado (para encontrar templates, etc)
 webhook_bp = Blueprint("webhook", __name__)
-
-# Sessões em memória — dicionário que guarda o estado de cada conversa
-# A chave é o número do cliente, o valor é o dicionário de sessão
-# Ex: {"5521999999999": {"estado": "menu_principal", "carrinho": []}}
-# ⚠️ Isso é temporário — no Módulo 4 vai para o banco de dados
-sections = {}
-
-#Inicia a classe state
 
 
 @webhook_bp.route("/webhook", methods=["GET"])
@@ -168,4 +164,49 @@ def initial_message():
 def status():
     #Verificando Status
     return jsonify({"status": "online", "bot": "mercadinho"}), 200
+
+
+dashboard_bp = Blueprint("/dashboard", __name__)
+
+def _require_auth(f):
+    """
+    Decorator that redirects unauthenticaded requests to the login page
+    """
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get("dashboard_authenticated"):
+            return redirect(url_for("dashboard.login"))
+        return f(*args, **kwargs)
+    return decorated
+
+@dashboard_bp.route("/login", methods=["GET", "POST"])
+def login():
+    """Handle dashboard login via password form."""
+    error: str | None = None
+
+    if request.method == "POST":
+        password: str = request.form.get("password", "")
+        expected: str = Config.DASHBOARD_PASSWORD
+
+        if password == expected:
+            session["dashboard_authenticated"] = True
+            return redirect(url_for("dashboard.index"))
+        else:
+            error = f"Senha incorreta - {password}. Tente novamente"
+            logger.error("Senha incorreta - %s. Tente novamente", password)
+
+    return render_template("login.html", error=error)
+
+@dashboard_bp.route("/logout")
+def logout():
+    """ Clear the current session and redirects to the login page."""
+    session.pop("dashboard_authenticated", None)
+    return redirect(url_for("dashboard.login"))
+
+@dashboard_bp.route("/")
+@_require_auth
+def index():
+    """ Main dashboard view - list of all orders from db"""
+    orders: list[dict] = store.get_all_orders()
+    return render_template("dashboard.html", orders=orders)
 

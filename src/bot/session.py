@@ -53,3 +53,14 @@ def get_all_sessions() -> dict:
         dict: All sessions stored in memory, with client numbers as keys and session data as values.
     """
     return _sessions
+
+def get_all_orders() -> list[dict]:
+    """Return all orders from all active sessions, sorted by creation time (newest first).
+    
+    Each order dict shape: {"sender": str, "items": list, "total": float,
+                            "status": str, "created_at": str}
+    """
+
+    all_orders: list[dict] = []
+
+

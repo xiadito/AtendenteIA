@@ -23,3 +23,7 @@ class Config:
     AI_BASE_URL = os.environ.get("AI_BASE_URL")
     AI_MODEL = os.environ.get("AI_MODEL")
     AI_API_KEY = os.environ.get("AI_API_KEY")
+
+    #dashboard
+    DASHBOARD_USER = os.environ.get("DASHBOARD_USER")
+    DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD")
