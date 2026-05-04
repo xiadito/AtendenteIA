@@ -6,6 +6,21 @@ logger = logging.getLogger(__name__)
 #Key: client number, Value: session data (dict)
 # this will be replaced by a database
 _sessions: dict[str, dict] = {}
+
+#EXAMPLE SESSION
+# _sessions = {
+#              sender (str): { history: [{"user/assistant": "message"}]},
+#              "orders": [ {"sender": sender, 
+#                           "status": status,
+#                           "created_at": created_at
+#                           "items": [{
+#                                       {"name": "Product name", "price": 0.00, "quantity": 1}
+#                                       {"name": "Product name", "price": 0.00, "quantity": 1}
+#                                    }],
+#                           "total": 0.00,
+#                          }],
+#               }   
+
 def get_session(sender: str) -> dict:
     """_summary_
         This function is responsible for getting the session of a client.
@@ -16,7 +31,7 @@ def get_session(sender: str) -> dict:
         dict: Session data for the client, including state, cart, current category, etc.
     """
 
-    if sender not in _sessions:
+    if sender not in _sessions:  
         logger.info(f"New session created for sender: {sender}")
         _sessions[sender]: dict = {"history": []}  # fresh list per user
     
@@ -54,13 +69,43 @@ def get_all_sessions() -> dict:
     """
     return _sessions
 
-def get_all_orders() -> list[dict]:
-    """Return all orders from all active sessions, sorted by creation time (newest first).
+def save_order(sender: str, order: dict) -> None:
+    """ 
+    Save a new order or update an existing one. Must be confirmed by the user for the AI.
     
-    Each order dict shape: {"sender": str, "items": list, "total": float,
-                            "status": str, "created_at": str}
+    Args:
+        sender (str): number of the client
+        order (dict): dict that contains the 'items' and 'total'
+    """
+
+    from datetime import datetime
+
+    _session: dict = _sessions.get(sender, get_session(sender))
+
+    if "orders" not in _session:
+        _session["orders"] = [] #inside this have a dict with data
+        order = {} 
+        order["sender"] = sender
+        order["status"] = "pending"
+        order["created_at"] = datetime.now().isoformat()
+
+        _session["order"].append(order) #save th
+        logger.info("order saved from %s: %s", sender, _session.get("orders", ""))
+
+def get_all_orders() -> list[dict]:
+    """Return all orders from all active sessions, sorted newest first.
+
+    Returns:
+        list[dict]: All orders, each containing sender, items, total, status and created_at.
     """
 
     all_orders: list[dict] = []
 
+    for session_data in _sessions.values():
+        #Some sessions may not have any orders yet - skip them safely
+        orders: list[dict] = session_data.get("orders", [])
+        all_orders.extend(orders)
 
+    all_orders.sort(key=lambda o: o.get("created_at", ""), reverse=True)
+
+    return all_orders
