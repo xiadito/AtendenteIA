@@ -80,4 +80,4 @@ def _add_to_history(history: list, role: str, content: str) -> None:
     if role not in allowed_roles:
         raise ValueError(f"Role inválida: {role!r}")
 
-    history.append({"role": role, "content": content})
+    history.append({"role": role, "content": content})  
