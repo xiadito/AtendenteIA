@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mercadinho da Vila — Pedidos</title>
+
+    <!-- Auto-refresh every 30 seconds to simulate real-time updates -->
+    <meta http-equiv="refresh" content="30">
+
+    <style>
+        body {
+            font-family: sans-serif;
+            background-color: #f5f5f5;
+            margin: 0;
+            padding: 1.5rem;
+            color: #333;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+        }
+
+        h1 { font-size: 1.3rem; margin: 0; }
+
+        a.logout {
+            font-size: 0.85rem;
+            color: #888;
+            text-decoration: none;
+        }
+
+        a.logout:hover { color: #333; }
+
+        /* Summary bar above the table */
+        .summary {
+            background: white;
+            border-radius: 8px;
+            padding: 1rem 1.5rem;
+            margin-bottom: 1.5rem;
+            display: flex;
+            gap: 2rem;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+        }
+
+        .summary-item span { font-size: 1.5rem; font-weight: bold; color: #2d7a2d; }
+        .summary-item p { margin: 0; font-size: 0.8rem; color: #888; }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+        }
+
+        th {
+            background-color: #2d7a2d;
+            color: white;
+            text-align: left;
+            padding: 0.75rem 1rem;
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+
+        td {
+            padding: 0.75rem 1rem;
+            font-size: 0.9rem;
+            border-bottom: 1px solid #f0f0f0;
+            vertical-align: top;
+        }
+
+        tr:last-child td { border-bottom: none; }
+        tr:hover td { background-color: #fafafa; }
+
+        /* Status badge: color changes based on the order status value */
+        .badge {
+            display: inline-block;
+            padding: 0.2rem 0.6rem;
+            border-radius: 12px;
+            font-size: 0.78rem;
+            font-weight: 600;
+        }
+
+        .badge-pending  { background: #fff3cd; color: #856404; }
+        .badge-delivered { background: #d1e7dd; color: #0a5233; }
+
+        /* The items list inside a cell */
+        .items-list { margin: 0; padding: 0; list-style: none; }
+        .items-list li { margin-bottom: 0.2rem; }
+
+        .empty-state {
+            text-align: center;
+            padding: 3rem;
+            color: #aaa;
+            font-size: 0.95rem;
+        }
+
+        /* Mark as delivered button */
+        .btn-deliver {
+            background: none;
+            border: 1px solid #2d7a2d;
+            color: #2d7a2d;
+            padding: 0.3rem 0.7rem;
+            border-radius: 4px;
+            font-size: 0.82rem;
+            cursor: pointer;
+        }
+
+        .btn-deliver:hover { background-color: #2d7a2d; color: white; }
+
+        .refresh-note {
+            text-align: right;
+            font-size: 0.78rem;
+            color: #aaa;
+            margin-top: 1rem;
+        }
+
+        /* ── Dark mode ── */
+        :root {
+            --bg: #f5f5f5;
+            --surface: #ffffff;
+            --text: #333333;
+            --subtext: #888888;
+            --border: #f0f0f0;
+            --shadow: rgba(0,0,0,0.08);
+        }
+
+        body.dark {
+            --bg: #1a1a1a;
+            --surface: #242424;
+            --text: #e0e0e0;
+            --subtext: #888888;
+            --border: #333333;
+            --shadow: rgba(0,0,0,0.3);
+        }
+
+        body          { background-color: var(--bg); color: var(--text); }
+        .summary      { background: var(--surface); box-shadow: 0 1px 4px var(--shadow); }
+        table         { background: var(--surface); box-shadow: 0 1px 4px var(--shadow); }
+        td            { border-bottom: 1px solid var(--border); }
+        tr:hover td   { background-color: var(--bg); }
+        .summary-item p { color: var(--subtext); }
+        a.logout      { color: var(--subtext); }
+        a.logout:hover { color: var(--text); }
+
+        /* Toggle button */
+        .theme-toggle {
+            background: none;
+            border: 1px solid var(--subtext);
+            color: var(--text);
+            border-radius: 20px;
+            padding: 0.3rem 0.8rem;
+            font-size: 0.82rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+
+        .theme-toggle:hover { border-color: var(--text); }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>🛒 Pedidos — Mercadinho da Vila</h1>
+        <div style="display:flex;align-items:center;gap:1rem;">
+            <button class="theme-toggle" id="themeBtn" onclick="toggleTheme()">🌙 Escuro</button>
+            <a href="/dashboard/logout" class="logout">Sair</a>
+        </div>
+    </header>
+
+    <!-- Summary bar: Jinja2 calculates totals from the orders list -->
+    <div class="summary">
+        <div class="summary-item">
+            <span>{{ orders | length }}</span>
+            <p>pedidos no total</p>
+        </div>
+        <div class="summary-item">
+            <!--
+                Jinja2 filter: selectattr filters items where status == "pending",
+                then list() converts the result so we can count it.
+            -->
+            <span>{{ orders | selectattr("status", "equalto", "pending") | list | length }}</span>
+            <p>aguardando entrega</p>
+        </div>
+    </div>
+
+    {% if orders %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Cliente</th>
+                    <th>Itens</th>
+                    <th>Total</th>
+                    <th>Status</th>
+                    <th>Horário</th>
+                    <th>Ação</th>
+                </tr>
+            </thead>
+            <tbody>
+                <!--
+                    Jinja2 loop: 'orders' is the list passed by dashboard.index().
+                    Each 'order' is a dict with keys: sender, items, total, status, created_at.
+                -->
+                {% for order in orders %}
+                <tr>
+                    <!-- Show only the last 9 digits of the phone number for privacy -->
+                     
+
+                    <td>
+                        <ul class="items-list">
+                            {% for item in order.items %}
+                                <li>{{ item.name }} x{{ item.quantity }} — R$ {{ "%.2f"|format(item.price * item.quantity) }}</li>
+                            {% endfor %}
+                        </ul>
+                    </td>
+
+                    <td><strong>R$ {{ "%.2f"|format(order.total) }}</strong></td>
+
+                    <td>
+                        <!--
+                            Conditional badge: renders a different CSS class
+                            depending on the order status string.
+                        -->
+                        {% if order.status == "pending" %}
+                            <span class="badge badge-pending">Pendente</span>
+                        {% else %}
+                            <span class="badge badge-delivered">Entregue</span>
+                        {% endif %}
+                    </td>
+
+                    <!-- Format the ISO timestamp to a readable time -->
+                    <td>{{ order.created_at[11:16] }}</td>
+
+                    <td>
+                        {% if order.status == "pending" %}
+                            <!--
+                                This form posts to the route we will build in Passo 3.
+                                We pass the sender and the order index so the backend
+                                knows exactly which order to update.
+                            -->
+                            <form method="POST" action="/dashboard/deliver">
+                                <input type="hidden" name="sender" value="{{ order.sender }}">
+                                <input type="hidden" name="order_index" value="{{ loop.index0 }}">
+                                <button type="submit" class="btn-deliver">Marcar entregue</button>
+                            </form>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+    {% else %}
+        <!-- Jinja2 else: rendered when the orders list is empty -->
+        <div class="empty-state">
+            <p>Nenhum pedido registrado ainda.</p>
+            <p>Os pedidos aparecerão aqui assim que os clientes confirmarem pelo WhatsApp.</p>
+        </div>
+    {% endif %}
+
+    <p class="refresh-note">Atualização automática a cada 30 segundos.</p>
+
+    <script>
+        function applyTheme(dark) {
+            document.body.classList.toggle('dark', dark);
+            document.getElementById('themeBtn').textContent = dark ? '☀️ Claro' : '🌙 Escuro';
+        }
+
+        function toggleTheme() {
+            const isDark = !document.body.classList.contains('dark');
+            localStorage.setItem('theme', isDark ? 'dark' : 'light');
+            applyTheme(isDark);
+        }
+
+        // Apply saved theme on load (fallback: OS preference)
+        const saved = localStorage.getItem('theme');
+        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        applyTheme(saved ? saved === 'dark' : prefersDark);
+    </script>
+</body>
+</html>

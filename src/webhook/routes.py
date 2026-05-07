@@ -6,7 +6,6 @@ from whatsapp.whatsapp_service import send_message
 from webhook.templates import receive_initial_message
 from bot.handlers import handle_text_message
 import bot.session as store
-from templates import login 
 
 
 # Configura o sistema de logs para mostrar data/hora, nível e mensagem
@@ -25,7 +24,6 @@ webhook_bp = Blueprint("webhook", __name__)
 
 @webhook_bp.route("/webhook", methods=["GET"])
 def verify():
-    # Módulo 2 — verificação do whatsapp
     """
     A meta chama esse webhook UMA VEZ quando eu cadastrar o webhook no painel da meta web developers
     Ela envia 3 parâmetros via query string (na URL):
@@ -157,7 +155,7 @@ def receive_twilio() -> tuple:
 
 @webhook_bp.route("/", methods=["GET"])
 def initial_message():
-    return "<p>Started the mercadinho bot server</p>"
+    return render_template("home.html")
 
 
 @webhook_bp.route("/status", methods=["GET"])
@@ -166,7 +164,7 @@ def status():
     return jsonify({"status": "online", "bot": "mercadinho"}), 200
 
 
-dashboard_bp = Blueprint("/dashboard", __name__)
+dashboard_bp = Blueprint("dashboard", __name__)
 
 def _require_auth(f):
     """
@@ -192,9 +190,9 @@ def login():
             session["dashboard_authenticated"] = True
             return redirect(url_for("dashboard.index"))
         else:
-            error = f"Senha incorreta - {password}. Tente novamente"
-            logger.error("Senha incorreta - %s. Tente novamente", password)
-
+            error = "Senha incorreta. Tente novamente."
+            logger.warning("Tentativa de login com senha incorreta.")
+    
     return render_template("login.html", error=error)
 
 @dashboard_bp.route("/logout")
@@ -203,7 +201,7 @@ def logout():
     session.pop("dashboard_authenticated", None)
     return redirect(url_for("dashboard.login"))
 
-@dashboard_bp.route("/")
+@dashboard_bp.route("/index")
 @_require_auth
 def index():
     """ Main dashboard view - list of all orders from db"""

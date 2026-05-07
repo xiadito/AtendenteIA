@@ -8,18 +8,20 @@ logger = logging.getLogger(__name__)
 _sessions: dict[str, dict] = {}
 
 #EXAMPLE SESSION
-# _sessions = {
-#              sender (str): { history: [{"user/assistant": "message"}]},
-#              "orders": [ {"sender": sender, 
-#                           "status": status,
-#                           "created_at": created_at
-#                           "items": [{
-#                                       {"name": "Product name", "price": 0.00, "quantity": 1}
-#                                       {"name": "Product name", "price": 0.00, "quantity": 1}
-#                                    }],
-#                           "total": 0.00,
-#                          }],
-#               }   
+#_sessions = {
+#     "5521999887766": {
+#         "history": [{"role": "user/assistant", "content": "message"}],
+#         "orders": [
+#             {
+#                 "sender":     "5521999887766",
+#                 "status":     "pending",
+#                 "created_at": "2026-05-07T10:00:00",
+#                 "items":      [{"name": "Arroz", "price": 5.99, "quantity": 2}],
+#                 "total":      11.98,
+#             }
+#         ],
+#     }
+# }
 
 def get_session(sender: str) -> dict:
     """_summary_
