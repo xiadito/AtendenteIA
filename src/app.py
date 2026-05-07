@@ -8,7 +8,7 @@ def create_app():
     
     # Register blueprints (modulos de rota)
     app.register_blueprint(webhook_bp)
-    app.register_blueprint(dashboard_bp)
+    app.register_blueprint(dashboard_bp, url_prefix="/dashboard")
     
     print("App created")
     return app
