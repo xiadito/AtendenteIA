@@ -1,0 +1,101 @@
+body {
+    padding: 1.5rem;
+}
+
+header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1.5rem;
+}
+
+h1 { font-size: 1.3rem; margin: 0; }
+
+a.logout {
+    font-size: 0.85rem;
+    color: #888;
+    text-decoration: none;
+}
+
+a.logout:hover { color: var(--text); }
+
+.summary {
+    background: var(--surface);
+    border-radius: 8px;
+    padding: 1rem 1.5rem;
+    margin-bottom: 1.5rem;
+    display: flex;
+    gap: 2rem;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+}
+
+.summary-item span { font-size: 1.5rem; font-weight: bold; color: var(--brand); }
+.summary-item p { margin: 0; font-size: 0.8rem; color: #888; }
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--surface);
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+}
+
+th {
+    background-color: var(--brand);
+    color: white;
+    text-align: left;
+    padding: 0.75rem 1rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+td {
+    padding: 0.75rem 1rem;
+    font-size: 0.9rem;
+    border-bottom: 1px solid #f0f0f0;
+    vertical-align: top;
+}
+
+tr:last-child td { border-bottom: none; }
+tr:hover td { background-color: var(--surface); }
+
+.badge {
+    display: inline-block;
+    padding: 0.2rem 0.6rem;
+    border-radius: 12px;
+    font-size: 0.78rem;
+    font-weight: 600;
+}
+
+.badge-pending  { background: #fff3cd; color: #856404; }
+.badge-delivered { background: #d1e7dd; color: #0a5233; }
+
+.items-list { margin: 0; padding: 0; list-style: none; }
+.items-list li { margin-bottom: 0.2rem; }
+
+.empty-state {
+    text-align: center;
+    padding: 3rem;
+    color: #aaa;
+    font-size: 0.95rem;
+}
+
+.btn-deliver {
+    background: none;
+    border: 1px solid var(--brand);
+    color: var(--brand);
+    padding: 0.3rem 0.7rem;
+    border-radius: 4px;
+    font-size: 0.82rem;
+    cursor: pointer;
+}
+
+.btn-deliver:hover { background-color: var(--brand); color: white; }
+
+.refresh-note {
+    text-align: right;
+    font-size: 0.78rem;
+    color: #aaa;
+    margin-top: 1rem;
+}
