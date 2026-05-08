@@ -2,6 +2,8 @@ import logging
 import whatsapp.whatsapp_service as whatsapp_service
 import bot.session as session
 from bot.ai_service import get_ai_response
+import json
+
 
 logger = logging.getLogger(__name__)
 

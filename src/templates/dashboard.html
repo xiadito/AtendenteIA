@@ -118,60 +118,13 @@
             color: #aaa;
             margin-top: 1rem;
         }
-
-        /* ── Dark mode ── */
-        :root {
-            --bg: #f5f5f5;
-            --surface: #ffffff;
-            --text: #333333;
-            --subtext: #888888;
-            --border: #f0f0f0;
-            --shadow: rgba(0,0,0,0.08);
-        }
-
-        body.dark {
-            --bg: #1a1a1a;
-            --surface: #242424;
-            --text: #e0e0e0;
-            --subtext: #888888;
-            --border: #333333;
-            --shadow: rgba(0,0,0,0.3);
-        }
-
-        body          { background-color: var(--bg); color: var(--text); }
-        .summary      { background: var(--surface); box-shadow: 0 1px 4px var(--shadow); }
-        table         { background: var(--surface); box-shadow: 0 1px 4px var(--shadow); }
-        td            { border-bottom: 1px solid var(--border); }
-        tr:hover td   { background-color: var(--bg); }
-        .summary-item p { color: var(--subtext); }
-        a.logout      { color: var(--subtext); }
-        a.logout:hover { color: var(--text); }
-
-        /* Toggle button */
-        .theme-toggle {
-            background: none;
-            border: 1px solid var(--subtext);
-            color: var(--text);
-            border-radius: 20px;
-            padding: 0.3rem 0.8rem;
-            font-size: 0.82rem;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            gap: 0.4rem;
-        }
-
-        .theme-toggle:hover { border-color: var(--text); }
     </style>
 </head>
 <body>
 
     <header>
         <h1>🛒 Pedidos — Mercadinho da Vila</h1>
-        <div style="display:flex;align-items:center;gap:1rem;">
-            <button class="theme-toggle" id="themeBtn" onclick="toggleTheme()">🌙 Escuro</button>
-            <a href="/dashboard/logout" class="logout">Sair</a>
-        </div>
+        <a href="/dashboard/logout" class="logout">Sair</a>
     </header>
 
     <!-- Summary bar: Jinja2 calculates totals from the orders list -->
@@ -210,24 +163,24 @@
                 {% for order in orders %}
                 <tr>
                     <!-- Show only the last 9 digits of the phone number for privacy -->
-                     
+                    <td>...{{ order.sender[-9:] }}</td>
 
                     <td>
                         <ul class="items-list">
-                            {% for item in order.items %}
+                            {% for item in order["items"] %}
                                 <li>{{ item.name }} x{{ item.quantity }} — R$ {{ "%.2f"|format(item.price * item.quantity) }}</li>
                             {% endfor %}
                         </ul>
                     </td>
 
-                    <td><strong>R$ {{ "%.2f"|format(order.total) }}</strong></td>
+                    <td><strong>R$ {{ "%.2f"|format(order["total"]) }}</strong></td>
 
                     <td>
                         <!--
                             Conditional badge: renders a different CSS class
                             depending on the order status string.
                         -->
-                        {% if order.status == "pending" %}
+                        {% if order["status"] == "pending" %}
                             <span class="badge badge-pending">Pendente</span>
                         {% else %}
                             <span class="badge badge-delivered">Entregue</span>
@@ -235,17 +188,17 @@
                     </td>
 
                     <!-- Format the ISO timestamp to a readable time -->
-                    <td>{{ order.created_at[11:16] }}</td>
+                    <td>{{ order["created_at"][11:16] }}</td>
 
                     <td>
-                        {% if order.status == "pending" %}
+                        {% if order["status"] == "pending" %}
                             <!--
                                 This form posts to the route we will build in Passo 3.
                                 We pass the sender and the order index so the backend
                                 knows exactly which order to update.
                             -->
                             <form method="POST" action="/dashboard/deliver">
-                                <input type="hidden" name="sender" value="{{ order.sender }}">
+                                <input type="hidden" name="sender" value="{{ order["sender"] }}">
                                 <input type="hidden" name="order_index" value="{{ loop.index0 }}">
                                 <button type="submit" class="btn-deliver">Marcar entregue</button>
                             </form>
@@ -266,22 +219,5 @@
 
     <p class="refresh-note">Atualização automática a cada 30 segundos.</p>
 
-    <script>
-        function applyTheme(dark) {
-            document.body.classList.toggle('dark', dark);
-            document.getElementById('themeBtn').textContent = dark ? '☀️ Claro' : '🌙 Escuro';
-        }
-
-        function toggleTheme() {
-            const isDark = !document.body.classList.contains('dark');
-            localStorage.setItem('theme', isDark ? 'dark' : 'light');
-            applyTheme(isDark);
-        }
-
-        // Apply saved theme on load (fallback: OS preference)
-        const saved = localStorage.getItem('theme');
-        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-        applyTheme(saved ? saved === 'dark' : prefersDark);
-    </script>
 </body>
 </html>

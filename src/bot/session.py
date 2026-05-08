@@ -11,7 +11,7 @@ _sessions: dict[str, dict] = {}
 #_sessions = {
 #     "5521999887766": {
 #         "history": [{"role": "user/assistant", "content": "message"}],
-#         "orders": [
+#         "order": [
 #             {
 #                 "sender":     "5521999887766",
 #                 "status":     "pending",
@@ -84,15 +84,15 @@ def save_order(sender: str, order: dict) -> None:
 
     _session: dict = _sessions.get(sender, get_session(sender))
 
-    if "orders" not in _session:
-        _session["orders"] = [] #inside this have a dict with data
-        order = {} 
-        order["sender"] = sender
-        order["status"] = "pending"
-        order["created_at"] = datetime.now().isoformat()
+    if "order" not in _session:
+        _session["order"] = [] #inside this have a dict with data.
+        
+    order["sender"] = sender
+    order["status"] = "pending"
+    order["created_at"] = datetime.now().isoformat()
 
-        _session["order"].append(order) #save th
-        logger.info("order saved from %s: %s", sender, _session.get("orders", ""))
+    _session["order"].append(order) #save the order
+    logger.info("order saved from %s: %s", sender, _session.get("order", ""))
 
 def get_all_orders() -> list[dict]:
     """Return all orders from all active sessions, sorted newest first.
@@ -105,7 +105,7 @@ def get_all_orders() -> list[dict]:
 
     for session_data in _sessions.values():
         #Some sessions may not have any orders yet - skip them safely
-        orders: list[dict] = session_data.get("orders", [])
+        orders: list[dict] = session_data.get("order", [])
         all_orders.extend(orders)
 
     all_orders.sort(key=lambda o: o.get("created_at", ""), reverse=True)
