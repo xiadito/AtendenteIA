@@ -11,6 +11,11 @@ header {
 
 h1 { font-size: 1.3rem; margin: 0; }
 
+.page-footer {
+    text-align: center;
+    padding: 2rem 0 1.5rem;
+}
+
 a.logout {
     font-size: 0.85rem;
     color: #888;
@@ -94,7 +99,7 @@ tr:hover td { background-color: var(--surface); }
 .btn-deliver:hover { background-color: var(--brand); color: white; }
 
 .refresh-note {
-    text-align: right;
+    text-align: center;
     font-size: 0.78rem;
     color: #aaa;
     margin-top: 1rem;

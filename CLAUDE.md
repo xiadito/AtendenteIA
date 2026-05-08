@@ -31,22 +31,32 @@ This is a **WhatsApp chatbot** for a grocery store ("Mercadinho da Vila") built 
 ```
 Twilio POST /webhook
   → webhook/routes.py::receive_twilio()
-    → bot/handlers.py::handle_message()
+    → bot/handlers.py::handle_text_message()
       → bot/session.py  (in-memory session store)
-      → whatsapp/whatsapp_service.py  (sends replies via Twilio)
+      → bot/ai_service.py::get_ai_response()  (calls LLM)
+      → whatsapp/whatsapp_service.py  (sends reply via Twilio)
 ```
 
-### State Machine
+### AI-Driven Conversation
 
-Conversations are driven by `bot/states.py::State` enum. Each incoming message is dispatched to a handler based on the session's current state:
+Conversations are fully driven by an LLM — there is no state machine. The flow in `bot/handlers.py::handle_text_message()` is:
 
-| State | Handler |
-|---|---|
-| `initial` | `_handle_initial` — sends main menu |
-| `main_menu` | `_handle_main_menu` — routes to category |
-| `chosing_product` | `_handle_choosing_product` — adds item to cart |
-| `waiting_action` | `_handle_waiting_action` — continue/view cart/checkout/attendant |
-| `attendant` | `_handle_attendant` — notifies human handoff |
+1. Load session and conversation history from `bot/session.py`
+2. Append the new user message to history
+3. Call `bot/ai_service.py::get_ai_response()` with the trimmed history
+4. Parse the AI response for an `ORDER_CONFIRMED:` JSON block using `_extract_order()`
+5. If an order block is found, strip it from the response and save it via `session.save_order()`
+6. Send the cleaned response to the user via Twilio
+
+History is capped at the last 10 turns (`max_history_turns = 10`) to control token usage.
+
+### AI Service
+
+`bot/ai_service.py` uses the **OpenAI SDK** pointed at a configurable base URL, making it compatible with both:
+- **Dev**: Ollama local server (e.g. `llama3.2`, `mistral`) via `AI_BASE_URL=http://localhost:11434/v1`
+- **Prod**: Anthropic-compatible endpoint (e.g. Claude Haiku 4.5) via `AI_BASE_URL=https://api.anthropic.com/v1`
+
+Switch between environments exclusively via env vars — no code changes required.
 
 ### Session Storage
 
@@ -54,21 +64,48 @@ Conversations are driven by `bot/states.py::State` enum. Each incoming message i
 
 ```python
 {
-    "state": str,           # State enum value
-    "cart": list[dict],     # [{"name", "price", "quantity"}]
-    "current_category": str,
-    "customer_name": str,
-    "last_text": str,
+    "history": list[dict],   # [{"role": "user"|"assistant", "content": str}]
+    "order":   list[dict],   # [{"sender", "status", "created_at", "items", "total"}]
 }
 ```
 
-### Product Catalog
+### Product Catalog & System Prompt
 
-`bot/Context.py` holds the hardcoded product catalog (`categories` dict) and the `STORE_CONTEXT` string used by the AI service. `bot/catalog.py` (deleted, still referenced by `handlers.py`) previously exported `Categories` — this import is currently broken.
+`bot/ai_context.py` holds:
+- `categories` — hardcoded product catalog (marked as temporary; will be loaded from DB)
+- `store_context` — store info (hours, delivery, payment) formatted for the prompt
+- `system_prompt` — full system prompt injected at the start of every LLM call
 
-### AI Service
+**Note:** `system_prompt` is accidentally defined twice in the file (duplicate assignment on line 122). The second definition wins at runtime — both are identical, so there is no current bug, but the duplicate should be cleaned up.
 
-`bot/ai_service.py` is a stub. The plan is to support Ollama locally and Claude Haiku in production, controlled by env vars `AI_BASE_URL`, `AI_MODEL`, `AI_API_KEY`.
+### Dashboard
+
+A password-protected web dashboard is available at `/dashboard/index`. Routes are defined in `webhook/routes.py` under `dashboard_bp`:
+
+| Route | Method | Description |
+|---|---|---|
+| `/dashboard/login` | GET/POST | Password login form |
+| `/dashboard/logout` | GET | Clears session, redirects to login |
+| `/dashboard/index` | GET | Order list (requires auth) |
+
+The `Marcar entregue` button in `dashboard.html` POSTs to `/dashboard/deliver`, which is **not yet implemented** in `routes.py`.
+
+### Static Assets
+
+All front-end assets live in `src/static/`:
+
+```
+src/static/
+├── css/
+│   ├── theme.css      ← CSS variables, dark mode override, .theme-toggle button
+│   ├── home.css       ← home page layout
+│   ├── login.css      ← login card + form styles
+│   └── dashboard.css  ← table, badges, summary bar
+└── js/
+    └── theme.js       ← shared dark/light theme toggle (all three pages)
+```
+
+Theme preference is persisted in `localStorage` and falls back to the OS `prefers-color-scheme` setting.
 
 ## Environment Variables
 
@@ -76,14 +113,25 @@ Defined in `src/.env` and loaded via `config.py`:
 
 | Variable | Purpose |
 |---|---|
-| `WHATSAPP_TOKEN` | Meta Cloud API token (currently unused) |
-| `WHATSAPP_PHONE_NUMBER_ID` | Meta Cloud API phone ID (currently unused) |
-| `VERIFY_TOKEN` | Meta webhook verification token |
-| `FLASK_SECRET_KEY` | Flask session secret |
-| `DATABASE_URL` | SQLite or Postgres URL (DB layer not yet active) |
 | `TWILIO_ACCOUNT_SID` | Twilio credentials |
 | `TWILIO_AUTH_TOKEN` | Twilio credentials |
 | `TWILIO_SANDBOX_NUMBER` | Twilio sandbox number (default: `whatsapp:+14155238886`) |
+| `VERIFY_TOKEN` | Meta webhook verification token (GET /webhook) |
+| `FLASK_SECRET_KEY` | Flask session secret (required for dashboard auth) |
+| `DASHBOARD_PASSWORD` | Plain-text password for the dashboard login |
+| `AI_BASE_URL` | LLM endpoint — Ollama or Anthropic-compatible |
+| `AI_MODEL` | Model name (e.g. `llama3.2`, `claude-haiku-4-5-20251001`) |
+| `AI_API_KEY` | API key for the LLM provider |
+| `DATABASE_URL` | SQLite or Postgres URL (DB layer not yet active) |
+| `WHATSAPP_TOKEN` | Meta Cloud API token (currently unused) |
+| `WHATSAPP_PHONE_NUMBER_ID` | Meta Cloud API phone ID (currently unused) |
+
+## Known Issues / TODOs
+
+- `database/db.py` is empty — the DB layer is not yet implemented.
+- `database/seed.py::seed_fake_orders()` is called unconditionally in `app.py::create_app()` on every startup. This must be removed or gated behind a dev-only flag before production.
+- `system_prompt` in `bot/ai_context.py` is defined twice (lines ~55 and ~122). Both are identical; the duplicate should be removed.
+- The `/dashboard/deliver` POST route is referenced in `dashboard.html` but not yet implemented in `routes.py`.
 
 ## Deployment
 

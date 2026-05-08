@@ -11,6 +11,7 @@ def seed_fake_orders() -> None:
                 {"name": "Leite integral 1L","price": 4.99, "quantity": 1},
             ],
             "total": 11.99,
+            "address": "Rua das Flores, 42 — Apto 3B, Vila Nova",
         },
         {
             "items": [
@@ -18,12 +19,14 @@ def seed_fake_orders() -> None:
                 {"name": "Queijo mussarela", "price": 12.90, "quantity": 1},
             ],
             "total": 22.80,
+            "address": "Av. Brasil, 1500 — Casa, Jardim América",
         },
         {
             "items": [
                 {"name": "Refrigerante 2L", "price": 7.99, "quantity": 3},
             ],
             "total": 23.97,
+            "address": "Retirada na loja",
         },
     ]
 
