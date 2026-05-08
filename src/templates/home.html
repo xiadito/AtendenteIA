@@ -4,69 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Mercadinho da Vila</title>
-    <style>
-        body {
-            font-family: sans-serif;
-            background-color: #f5f5f5;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            margin: 0;
-        }
-
-        .card {
-            background: white;
-            padding: 2rem 2.5rem;
-            border-radius: 8px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-            text-align: center;
-        }
-
-        h1 { font-size: 1.3rem; color: #333; margin-bottom: 1.5rem; }
-
-        a {
-            display: inline-block;
-            padding: 0.7rem 1.5rem;
-            background-color: #2d7a2d;
-            color: white;
-            text-decoration: none;
-            border-radius: 4px;
-            font-size: 1rem;
-        }
-
-        a:hover { background-color: #235e23; }
-
-        /* ── Dark mode ── */
-        :root {
-            --bg: #f5f5f5;
-            --surface: #ffffff;
-            --text: #333333;
-        }
-
-        body.dark {
-            --bg: #1a1a1a;
-            --surface: #242424;
-            --text: #e0e0e0;
-        }
-
-        body  { background-color: var(--bg); color: var(--text); }
-        .card { background: var(--surface); }
-        h1    { color: var(--text); }
-
-        .theme-toggle {
-            position: fixed;
-            top: 1rem;
-            right: 1rem;
-            background: none;
-            border: 1px solid #aaa;
-            color: var(--text);
-            border-radius: 20px;
-            padding: 0.3rem 0.8rem;
-            font-size: 0.82rem;
-            cursor: pointer;
-        }
-    </style>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/theme.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/home.css') }}">
 </head>
 <body>
     <button class="theme-toggle" id="themeBtn" onclick="toggleTheme()">🌙 Escuro</button>
@@ -74,21 +13,6 @@
         <h1>Mercadinho da Vila</h1>
         <a href="{{ url_for('dashboard.index') }}">Abrir Dashboard de Pedidos</a>
     </div>
-    <script>
-        function applyTheme(dark) {
-            document.body.classList.toggle('dark', dark);
-            document.getElementById('themeBtn').textContent = dark ? '☀️ Claro' : '🌙 Escuro';
-        }
-
-        function toggleTheme() {
-            const isDark = !document.body.classList.contains('dark');
-            localStorage.setItem('theme', isDark ? 'dark' : 'light');
-            applyTheme(isDark);
-        }
-
-        const saved = localStorage.getItem('theme');
-        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-        applyTheme(saved ? saved === 'dark' : prefersDark);
-    </script>
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
 </body>
 </html>
