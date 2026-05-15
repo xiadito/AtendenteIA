@@ -73,8 +73,29 @@ tr:hover td { background-color: var(--surface); }
     font-weight: 600;
 }
 
-.badge-pending  { background: #fff3cd; color: #856404; }
-.badge-delivered { background: #d1e7dd; color: #0a5233; }
+.badge-pending   { background: #fff3cd; color: #856404; } /* yellow  */
+.badge-confirmed { background: #cce5ff; color: #004085; } /* blue    */
+.badge-preparing { background: #ffe5d0; color: #7d3200; } /* orange  */
+.badge-ready     { background: #d4edda; color: #155724; } /* green   */
+.badge-delivered { background: #d1e7dd; color: #0a5233; } /* teal    */
+.badge-cancelled { background: #f8d7da; color: #721c24; } /* red     */
+
+.actions { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+
+.btn-action {
+    background: none;
+    border: 1px solid #aaa;
+    color: #555;
+    padding: 0.3rem 0.7rem;
+    border-radius: 4px;
+    font-size: 0.78rem;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.btn-action:hover  { background: #f0f0f0; }
+.btn-action.danger { border-color: #c0392b; color: #c0392b; }
+.btn-action.danger:hover { background: #fdf0ef; }
 
 .items-list { margin: 0; padding: 0; list-style: none; }
 .items-list li { margin-bottom: 0.2rem; }

@@ -1,7 +1,8 @@
-from flask import Blueprint, jsonify, request, render_template, redirect, url_for, session 
-from functools import wraps      
+from flask import Blueprint, jsonify, request, render_template, redirect, url_for, session
+from functools import wraps
 from config import Config
-import logging #modulo padrão de python para logs
+import logging
+import threading
 from whatsapp.whatsapp_service import send_message
 from webhook.templates import receive_initial_message
 from bot.handlers import handle_text_message
@@ -207,4 +208,32 @@ def index():
     """ Main dashboard view - list of all orders from db"""
     orders: list[dict] = store.get_all_orders()
     return render_template("dashboard.html", orders=orders)
+
+@dashboard_bp.route("/update-order-status", methods=["POST"])
+@_require_auth
+def update_status():
+    """Endpoint to update the status of an order from the dashboard form.
+    
+    Receives order_id and the target stattus, validades both and redirects back to  the dashboard.
+    """
+    
+    order_id: str = request.form.get("order_id", "")
+    new_status: str = request.form.get("status", "")
+    
+    if not order_id or not new_status:
+        logger.warning("update_status: missing order_id or status in POST request.")
+        return redirect(url_for("dashboard.index"))
+    
+    if new_status not in store.valid_order_statuses:
+        logger.warning("update_status: invalid status '%s' received.", new_status)
+        return redirect(url_for("dashboard.index"))
+    
+    success: bool = store.update_order_status(order_id, new_status)
+    
+    if not success:
+        logger.warning("update_status: order_id %s could not be updated.", order_id)
+        
+    return redirect(url_for("dashboard.index"))
+        
+    
 
