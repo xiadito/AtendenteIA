@@ -48,11 +48,12 @@ def handle_text_message(sender: str, body: str) -> dict:
         session.save_order(sender, order)
     
     response = _strip_order_block(raw_response)
-    
-    # Append the assistant reply to history
-    _add_to_history(history, "assistant", response)
+
+    # Keep the raw response (with ORDER_CONFIRMED block) in history so the AI
+    # remembers the order was already placed and won't emit the block again.
+    _add_to_history(history, "assistant", raw_response)
     _session["history"] = _trim_history(history)
-    
+
     whatsapp_service.send_message(sender, response)
 
 

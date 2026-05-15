@@ -81,3 +81,16 @@ def get_ai_response(conversation_history: list[dict[str, str]]) -> str:
 
     logger.info("AI replied with %d", len(reply))
     return reply.strip()
+
+def update_order_status(sender: str, order_index: int, status: str) -> bool:
+    """
+    Updates the status of an order in the database.
+
+    Args:
+        sender (str): The user who sent the message.
+        order_index (int): The index of the order to update.
+        status (str): The new status to set for the order.
+
+    Returns:
+        bool: True if the update was successful, False otherwise.
+    """

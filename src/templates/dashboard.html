@@ -9,6 +9,20 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
 </head>
 <body>
+
+    {% macro action_form(order_id, target_status) %}
+        <form method="POST" action="{{ url_for('dashboard.update_status') }}">
+            <input type="hidden" name="order_id"  value="{{ order_id }}">
+            <input type="hidden" name="status"    value="{{ target_status }}">
+            <button
+                type="submit"
+                class="btn-action {% if target_status == 'cancelled' %}danger{% endif %}"
+            >
+                {{ caller() }}
+            </button>
+        </form>
+    {% endmacro %}
+
     <button class="theme-toggle" id="themeBtn" onclick="toggleTheme()">🌙 Escuro</button>
     <header>
         <h1>🛒 Pedidos — Mercadinho da Vila</h1>
@@ -53,26 +67,52 @@
 
                     <td><strong>R$ {{ "%.2f"|format(order["total"]) }}</strong></td>
 
-                    <td>{{order.get("address", "Endereço não fornecido")}}</td>
-
                     <td>
-                        {% if order["status"] == "pending" %}
-                            <span class="badge badge-pending">Pendente</span>
-                        {% else %}
-                            <span class="badge badge-delivered">Entregue</span>
-                        {% endif %}
+                         <span class="badge badge-{{ order.status }}">
+                            {% if   order.status == "pending"   %} Pendente
+                            {% elif order.status == "confirmed" %} Confirmado
+                            {% elif order.status == "preparing" %} Preparando
+                            {% elif order.status == "ready"     %} Pronto
+                            {% elif order.status == "delivered" %} Entregue
+                            {% elif order.status == "cancelled" %} Cancelado
+                            {% endif %}
+                        </span>
                     </td>
 
                     <td>{{ order["created_at"][11:16] }}</td>
 
+                    <td>{{order.get("address", "Endereço não fornecido")}}</td>
+
                     <td>
-                        {% if order["status"] == "pending" %}
-                            <form method="POST" action="/dashboard/deliver">
-                                <input type="hidden" name="sender" value="{{ order["sender"] }}">
-                                <input type="hidden" name="order_index" value="{{ loop.index0 }}">
-                                <button type="submit" class="btn-deliver">Marcar entregue</button>
-                            </form>
+                     <div class="actions">
+                        {% if order.status == "pending" %}
+                            {% call action_form(order.id, "confirmed") %}
+                                ✅ Confirmar
+                            {% endcall %}
+                            {% call action_form(order.id, "cancelled") %}
+                                ✖ Cancelar
+                            {% endcall %}
+
+                        {% elif order.status == "confirmed" %}
+                            {% call action_form(order.id, "preparing") %}
+                                👨‍🍳 Preparando
+                            {% endcall %}
+                            {% call action_form(order.id, "cancelled") %}
+                                ✖ Cancelar
+                            {% endcall %}
+
+                        {% elif order.status == "preparing" %}
+                            {% call action_form(order.id, "ready") %}
+                                🛵 Pronto p/ entrega
+                            {% endcall %}
+
+                        {% elif order.status == "ready" %}
+                            {% call action_form(order.id, "delivered") %}
+                                📦 Entregue
+                            {% endcall %}
                         {% endif %}
+                        <!-- delivered and cancelled show no actions — terminal states -->
+                        </div>
                     </td>
                 </tr>
                 {% endfor %}
