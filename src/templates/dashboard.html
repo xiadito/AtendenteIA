@@ -39,6 +39,21 @@
         </div>
     </div>
 
+    <div class="status_filter">
+        <form method="GET" action="{{ url_for('dashboard.index') }}">
+            <select name="status">
+                <option value="">Todos</option>
+                <option value="pending"    {% if active_filter == "pending"    %}selected{% endif %}>Pendente</option>
+                <option value="confirmed"  {% if active_filter == "confirmed"  %}selected{% endif %}>Confirmado</option>
+                <option value="preparing"  {% if active_filter == "preparing"  %}selected{% endif %}>Preparando</option>
+                <option value="ready"      {% if active_filter == "ready"      %}selected{% endif %}>Pronto</option>
+                <option value="delivered"  {% if active_filter == "delivered"  %}selected{% endif %}>Entregue</option>
+                <option value="cancelled"  {% if active_filter == "cancelled"  %}selected{% endif %}>Cancelado</option>
+            </select>
+            <button type="submit">Filtrar</button>
+        </form>
+    </div>
+
     {% if orders %}
         <table>
             <thead>
