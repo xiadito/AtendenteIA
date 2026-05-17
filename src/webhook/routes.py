@@ -206,8 +206,21 @@ def logout():
 @_require_auth
 def index():
     """ Main dashboard view - list of all orders from db"""
-    orders: list[dict] = store.get_all_orders()
-    return render_template("dashboard.html", orders=orders)
+    status_filter: str = request.args.get("status", "")
+    
+    all_orders: list[dict] = store.get_all_orders()
+    
+    if status_filter and status_filter in store.valid_order_statuses:
+        orders: list[dict] = [order for order in all_orders if order["status"] == status_filter]
+    else:
+        orders: list[dict] = all_orders
+    
+    
+    return render_template("dashboard.html", 
+                           orders=orders, 
+                           valid_statuses=store.valid_order_statuses, 
+                           active_filter=status_filter,
+                           )
 
 @dashboard_bp.route("/update-order-status", methods=["POST"])
 @_require_auth
