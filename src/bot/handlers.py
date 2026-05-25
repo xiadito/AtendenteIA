@@ -4,6 +4,8 @@ import bot.session as session
 from bot.ai_service import get_ai_response
 import json
 
+from database.db import get_connection
+
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +30,13 @@ def handle_text_message(sender: str, body: str) -> dict:
     
     # load the existing session
     _session: dict = session.get_session(sender) # get the session of the client
+    
+    print("session found:", _session)
+    
+    if _session is None:
+        logger.error("Session not found for sender %s", sender)
+        _session = {"history": []} # create a default session to avoid breaking the flow. This should not happen because get_session creates a session if it doesn't exist, but just in case.
+
     history: list[dict[str, str]] = _session.get("history", [])
     
     # Append the new user turn to the history
@@ -35,7 +44,7 @@ def handle_text_message(sender: str, body: str) -> dict:
 
     # call the AI to give a response
     try:
-        raw_response: str = get_ai_response(_trim_history(history))
+        raw_response: str = get_ai_response(_trim_history(history)) # passes the context to the AI
     except RuntimeError as exc:
         logger.error("AI service error for sender %s: %s", sender, exc)
         raw_response = (
@@ -43,7 +52,8 @@ def handle_text_message(sender: str, body: str) -> dict:
             "Poderia reenviar a mensagem ou chamar outro atendente?"
         )
 
-    order: dict | None = _extract_order(raw_response)
+    order: dict | None = _extract_order(raw_response) # extract the order block if it exists
+    
     if order is not None:
         session.save_order(sender, order)
     
@@ -53,6 +63,8 @@ def handle_text_message(sender: str, body: str) -> dict:
     # remembers the order was already placed and won't emit the block again.
     _add_to_history(history, "assistant", raw_response)
     _session["history"] = _trim_history(history)
+    
+    session.save_session(sender, _session)
 
     whatsapp_service.send_message(sender, response)
 

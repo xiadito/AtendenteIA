@@ -119,7 +119,8 @@ ORDER_CONFIRMED:
     {{"name": "Product name", "price": 0.00, "quantity": 1}}
   ],
   "total": 0.00,
-  "address": "Full address provided by the customer, or 'Retirada na loja'"
+  "address": "Full address provided by the customer, or 'Retirada na loja'",
+  "status": "pending"
 }}
 
 PRODUCT CATALOG:
