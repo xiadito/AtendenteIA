@@ -1,9 +1,18 @@
 import bot.session as store
+import config
 
 def seed_fake_orders() -> None:
     """
     Populate the session store with fake orders for dashboard testing.
     """
+    if config.FLASK_ENV != "development":
+        print("Skipping seeding fake orders in non-development environment.")
+        return
+    
+    if len(store.get_all_orders()) > 0:
+        print("Orders already exist in the database. Skipping seeding.")
+        return
+    
     fake_orders: list[dict] = [
         {
             "items": [
