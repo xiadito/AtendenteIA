@@ -30,17 +30,6 @@ logger: logging.Logger = logging.getLogger(__name__)
 # with the real ones from PDV Rio's Firebird database.
 # ============================================================
 
-products_query: str = """
-SELECT 
-    ID AS EXTERNAL_ID,
-    CODIGO AS CODE,
-    DESCRICAO AS NAME,
-    PRECO AS PRICE,
-    ESTOQUE AS STOCK_QUANTITY,
-    CATEGORIA AS CATEGORY
-FROM PRODUTO
-"""
-
 @dataclass(frozen=True)
 class ProductRecord:
     """Imutable representation of a single product read from the POS.
@@ -95,7 +84,17 @@ class FirebirdReader:
         
         with self._connect() as conn:
             cur = conn.cursor()
-            cur.execute(products_query)
+            cur.execute("""
+                SELECT 
+                    ID AS EXTERNAL_ID,
+                    CODIGO AS CODE,
+                    DESCRICAO AS NAME,
+                    PRECO AS PRICE,
+                    ESTOQUE AS STOCK_QUANTITY,
+                    CATEGORIA AS CATEGORY
+                FROM PRODUTO
+                """
+            )
             rows: list[tuple] = cur.fetchall()
             
         products: list[ProductRecord] = [self._row_to_product(row) for row in rows]
