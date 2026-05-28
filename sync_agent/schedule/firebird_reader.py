@@ -64,7 +64,7 @@ class FirebirdReader:
     def _connect(self) -> Iterator[fb.Connection]:
         """Open a Firebird connection bound to a 'with' block."""
         
-        conn = fb.Connection = fb.connect(
+        conn: fb.Connection = fb.connect(
             self.dsn,
             user=self.user,
             password=self.password,
@@ -109,7 +109,7 @@ class FirebirdReader:
         raw_external_id, raw_code, raw_name, raw_price, raw_stock_quantity, raw_category = row
         
         return ProductRecord(
-            external_id = str(raw_external_id),
+            external_id = int(raw_external_id),
             code = str(raw_code).strip() if raw_code is not None else None,
             name = str(raw_name).strip(),
             price = Decimal(str(raw_price)) if raw_price is not None else Decimal("0.00"),

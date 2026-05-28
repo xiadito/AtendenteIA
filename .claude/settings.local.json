@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "WebFetch(domain:developers.openai.com)"
+      "WebFetch(domain:developers.openai.com)",
+      "PowerShell(Stop-Service *)"
     ]
   },
   "outputStyle": "Explanatory"

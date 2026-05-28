@@ -35,14 +35,14 @@ class PostgresWriter:
     def _connect(self) -> Iterator[PgConnection]:
         """Open a PostgreSQL connection bound to a 'with' block."""
         
-        conn = psycopg2.connect(self.database_url)
+        conn = psycopg2.connect(self.database_url, connect_timeout=CONNECT_TIMEOUT_SECONDS)
         try:
             yield conn
         finally:
             conn.close()
             
             
-    def sync_product(self, products: List[ProductRecord]) -> dict[str, int]:
+    def sync_products(self, products: List[ProductRecord]) -> dict[str, int]:
         """Persist the product catalog: upsert all incoming products and 
         soft-delete any product missing from the current snapshot.
 
