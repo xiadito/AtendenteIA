@@ -1,0 +1,302 @@
+2026-05-28 17:15:16,083 - INFO - Sync agent starting up
+2026-05-28 17:15:16,083 - INFO - Starting sync cycle
+2026-05-28 17:15:16,086 - ERROR - Error during sync cycle: The location of Firebird Client Library could not be determined.
+Traceback (most recent call last):
+  File "C:\Users\xiadito\Desktop\WhatsappBot\whatsapp_bot\sync_agent\schedule\main.py", line 56, in run_one_cycle
+    products = reader.fetch_products()
+               ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\xiadito\Desktop\WhatsappBot\whatsapp_bot\sync_agent\schedule\firebird_reader.py", line 85, in fetch_products
+    with self._connect() as conn:
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.11_3.11.2544.0_x64__qbz5n2kfra8p0\Lib\contextlib.py", line 137, in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+  File "C:\Users\xiadito\Desktop\WhatsappBot\whatsapp_bot\sync_agent\schedule\firebird_reader.py", line 67, in _connect
+    conn: fb.Connection = fb.connect(
+                          ^^^^^^^^^^^
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\firebird\driver\core.py", line 2159, in connect
+    return __make_connection(False, dsn, db_config.utf8filename.value, dpb.get_buffer(),
+                                                                       ^^^^^^^^^^^^^^^^
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\firebird\driver\core.py", line 613, in get_buffer
+    with a.get_api().util.get_xpb_builder(XpbKind.DPB) as dpb:
+         ^^^^^^^^^^^
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\firebird\driver\fbapi.py", line 2232, in get_api
+    load_api()
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\firebird\driver\fbapi.py", line 2223, in load_api
+    _api = FirebirdAPI(filename)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\firebird\driver\fbapi.py", line 2036, in __init__
+    raise Exception("The location of Firebird Client Library could not be determined.")
+Exception: The location of Firebird Client Library could not be determined.
+2026-05-28 17:15:16,091 - INFO - Sleeping for 300 seconds before next cycle
+2026-05-28 17:15:49,301 - INFO - Sync agent shutting down due to keyboard interrupt
+2026-05-28 17:19:48,580 - INFO - Sync agent starting up
+2026-05-28 17:19:48,580 - INFO - Starting sync cycle
+2026-05-28 17:19:48,582 - ERROR - Error during sync cycle: The location of Firebird Client Library could not be determined.
+Traceback (most recent call last):
+  File "C:\Users\xiadito\Desktop\WhatsappBot\whatsapp_bot\sync_agent\schedule\main.py", line 56, in run_one_cycle
+    products = reader.fetch_products()
+               ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\xiadito\Desktop\WhatsappBot\whatsapp_bot\sync_agent\schedule\firebird_reader.py", line 85, in fetch_products
+    with self._connect() as conn:
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.11_3.11.2544.0_x64__qbz5n2kfra8p0\Lib\contextlib.py", line 137, in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+  File "C:\Users\xiadito\Desktop\WhatsappBot\whatsapp_bot\sync_agent\schedule\firebird_reader.py", line 67, in _connect
+    conn: fb.Connection = fb.connect(
+                          ^^^^^^^^^^^
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\firebird\driver\core.py", line 2159, in connect
+    return __make_connection(False, dsn, db_config.utf8filename.value, dpb.get_buffer(),
+                                                                       ^^^^^^^^^^^^^^^^
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\firebird\driver\core.py", line 613, in get_buffer
+    with a.get_api().util.get_xpb_builder(XpbKind.DPB) as dpb:
+         ^^^^^^^^^^^
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\firebird\driver\fbapi.py", line 2232, in get_api
+    load_api()
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\firebird\driver\fbapi.py", line 2223, in load_api
+    _api = FirebirdAPI(filename)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\firebird\driver\fbapi.py", line 2036, in __init__
+    raise Exception("The location of Firebird Client Library could not be determined.")
+Exception: The location of Firebird Client Library could not be determined.
+2026-05-28 17:19:48,585 - INFO - Sleeping for 300 seconds before next cycle
+2026-05-28 17:19:51,090 - INFO - Sync agent shutting down due to keyboard interrupt
+2026-05-28 17:23:42,385 - INFO - Sync agent starting up
+2026-05-28 17:23:42,386 - INFO - Starting sync cycle
+2026-05-28 17:23:42,388 - ERROR - Error during sync cycle: Firebird Client Library 'C:\Program Files\Firebird\Firebird_2_5\fbclient.dll' not found
+Traceback (most recent call last):
+  File "C:\Users\xiadito\Desktop\WhatsappBot\whatsapp_bot\sync_agent\schedule\main.py", line 61, in run_one_cycle
+    products = reader.fetch_products()
+               ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\xiadito\Desktop\WhatsappBot\whatsapp_bot\sync_agent\schedule\firebird_reader.py", line 85, in fetch_products
+    with self._connect() as conn:
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.11_3.11.2544.0_x64__qbz5n2kfra8p0\Lib\contextlib.py", line 137, in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+  File "C:\Users\xiadito\Desktop\WhatsappBot\whatsapp_bot\sync_agent\schedule\firebird_reader.py", line 67, in _connect
+    conn: fb.Connection = fb.connect(
+                          ^^^^^^^^^^^
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\firebird\driver\core.py", line 2159, in connect
+    return __make_connection(False, dsn, db_config.utf8filename.value, dpb.get_buffer(),
+                                                                       ^^^^^^^^^^^^^^^^
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\firebird\driver\core.py", line 613, in get_buffer
+    with a.get_api().util.get_xpb_builder(XpbKind.DPB) as dpb:
+         ^^^^^^^^^^^
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\firebird\driver\fbapi.py", line 2232, in get_api
+    load_api()
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\firebird\driver\fbapi.py", line 2223, in load_api
+    _api = FirebirdAPI(filename)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\firebird\driver\fbapi.py", line 2040, in __init__
+    raise Exception(f"Firebird Client Library '{filename}' not found")
+Exception: Firebird Client Library 'C:\Program Files\Firebird\Firebird_2_5\fbclient.dll' not found
+2026-05-28 17:23:42,391 - INFO - Sleeping for 300 seconds before next cycle
+2026-05-28 17:23:50,822 - INFO - Sync agent shutting down due to keyboard interrupt
+2026-05-28 17:24:38,774 - INFO - Sync agent starting up
+2026-05-28 17:24:38,775 - INFO - Starting sync cycle
+2026-05-28 17:24:38,776 - ERROR - Error during sync cycle: Firebird Client Library 'C:\Program Files (x86)\Firebird\Firebird_2_5\fbclient.dll' not found
+Traceback (most recent call last):
+  File "C:\Users\xiadito\Desktop\WhatsappBot\whatsapp_bot\sync_agent\schedule\main.py", line 61, in run_one_cycle
+    products = reader.fetch_products()
+               ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\xiadito\Desktop\WhatsappBot\whatsapp_bot\sync_agent\schedule\firebird_reader.py", line 85, in fetch_products
+    with self._connect() as conn:
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.11_3.11.2544.0_x64__qbz5n2kfra8p0\Lib\contextlib.py", line 137, in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+  File "C:\Users\xiadito\Desktop\WhatsappBot\whatsapp_bot\sync_agent\schedule\firebird_reader.py", line 67, in _connect
+    conn: fb.Connection = fb.connect(
+                          ^^^^^^^^^^^
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\firebird\driver\core.py", line 2159, in connect
+    return __make_connection(False, dsn, db_config.utf8filename.value, dpb.get_buffer(),
+                                                                       ^^^^^^^^^^^^^^^^
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\firebird\driver\core.py", line 613, in get_buffer
+    with a.get_api().util.get_xpb_builder(XpbKind.DPB) as dpb:
+         ^^^^^^^^^^^
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\firebird\driver\fbapi.py", line 2232, in get_api
+    load_api()
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\firebird\driver\fbapi.py", line 2223, in load_api
+    _api = FirebirdAPI(filename)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\firebird\driver\fbapi.py", line 2040, in __init__
+    raise Exception(f"Firebird Client Library '{filename}' not found")
+Exception: Firebird Client Library 'C:\Program Files (x86)\Firebird\Firebird_2_5\fbclient.dll' not found
+2026-05-28 17:24:38,779 - INFO - Sleeping for 300 seconds before next cycle
+2026-05-28 17:24:46,641 - INFO - Sync agent shutting down due to keyboard interrupt
+2026-05-28 17:25:51,671 - INFO - Sync agent starting up
+2026-05-28 17:25:51,671 - INFO - Starting sync cycle
+2026-05-28 17:25:51,675 - ERROR - Error during sync cycle: Firebird Client Library 'C:\Program Files (x86)\Firebird\Firebird_2_5inbclient.dll' not found
+Traceback (most recent call last):
+  File "C:\Users\xiadito\Desktop\WhatsappBot\whatsapp_bot\sync_agent\schedule\main.py", line 61, in run_one_cycle
+    products = reader.fetch_products()
+               ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\xiadito\Desktop\WhatsappBot\whatsapp_bot\sync_agent\schedule\firebird_reader.py", line 85, in fetch_products
+    with self._connect() as conn:
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.11_3.11.2544.0_x64__qbz5n2kfra8p0\Lib\contextlib.py", line 137, in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+  File "C:\Users\xiadito\Desktop\WhatsappBot\whatsapp_bot\sync_agent\schedule\firebird_reader.py", line 67, in _connect
+    conn: fb.Connection = fb.connect(
+                          ^^^^^^^^^^^
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\firebird\driver\core.py", line 2159, in connect
+    return __make_connection(False, dsn, db_config.utf8filename.value, dpb.get_buffer(),
+                                                                       ^^^^^^^^^^^^^^^^
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\firebird\driver\core.py", line 613, in get_buffer
+    with a.get_api().util.get_xpb_builder(XpbKind.DPB) as dpb:
+         ^^^^^^^^^^^
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\firebird\driver\fbapi.py", line 2232, in get_api
+    load_api()
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\firebird\driver\fbapi.py", line 2223, in load_api
+    _api = FirebirdAPI(filename)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\firebird\driver\fbapi.py", line 2040, in __init__
+    raise Exception(f"Firebird Client Library '{filename}' not found")
+Exception: Firebird Client Library 'C:\Program Files (x86)\Firebird\Firebird_2_5inbclient.dll' not found
+2026-05-28 17:25:51,679 - INFO - Sleeping for 300 seconds before next cycle
+2026-05-28 17:26:05,183 - INFO - Sync agent shutting down due to keyboard interrupt
+2026-05-28 17:28:36,704 - INFO - Sync agent starting up
+2026-05-28 17:28:36,704 - INFO - Starting sync cycle
+2026-05-28 17:28:36,705 - ERROR - Error during sync cycle: [WinError 193] %1 is not a valid Win32 application
+Traceback (most recent call last):
+  File "C:\Users\xiadito\Desktop\WhatsappBot\whatsapp_bot\sync_agent\schedule\main.py", line 61, in run_one_cycle
+    products = reader.fetch_products()
+               ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\xiadito\Desktop\WhatsappBot\whatsapp_bot\sync_agent\schedule\firebird_reader.py", line 85, in fetch_products
+    with self._connect() as conn:
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.11_3.11.2544.0_x64__qbz5n2kfra8p0\Lib\contextlib.py", line 137, in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+  File "C:\Users\xiadito\Desktop\WhatsappBot\whatsapp_bot\sync_agent\schedule\firebird_reader.py", line 67, in _connect
+    conn: fb.Connection = fb.connect(
+                          ^^^^^^^^^^^
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\firebird\driver\core.py", line 2159, in connect
+    return __make_connection(False, dsn, db_config.utf8filename.value, dpb.get_buffer(),
+                                                                       ^^^^^^^^^^^^^^^^
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\firebird\driver\core.py", line 613, in get_buffer
+    with a.get_api().util.get_xpb_builder(XpbKind.DPB) as dpb:
+         ^^^^^^^^^^^
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\firebird\driver\fbapi.py", line 2232, in get_api
+    load_api()
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\firebird\driver\fbapi.py", line 2223, in load_api
+    _api = FirebirdAPI(filename)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\firebird\driver\fbapi.py", line 2045, in __init__
+    self.client_library: ctypes.CDLL = ctypes.WinDLL(str(filename))
+                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.11_3.11.2544.0_x64__qbz5n2kfra8p0\Lib\ctypes\__init__.py", line 376, in __init__
+    self._handle = _dlopen(self._name, mode)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+OSError: [WinError 193] %1 is not a valid Win32 application
+2026-05-28 17:28:36,709 - INFO - Sleeping for 300 seconds before next cycle
+2026-05-28 17:28:42,835 - INFO - Sync agent shutting down due to keyboard interrupt
+2026-05-28 17:28:47,226 - INFO - Sync agent starting up
+2026-05-28 17:28:47,227 - INFO - Starting sync cycle
+2026-05-28 17:28:47,228 - ERROR - Error during sync cycle: [WinError 193] %1 is not a valid Win32 application
+Traceback (most recent call last):
+  File "C:\Users\xiadito\Desktop\WhatsappBot\whatsapp_bot\sync_agent\schedule\main.py", line 61, in run_one_cycle
+    products = reader.fetch_products()
+               ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\xiadito\Desktop\WhatsappBot\whatsapp_bot\sync_agent\schedule\firebird_reader.py", line 85, in fetch_products
+    with self._connect() as conn:
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.11_3.11.2544.0_x64__qbz5n2kfra8p0\Lib\contextlib.py", line 137, in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+  File "C:\Users\xiadito\Desktop\WhatsappBot\whatsapp_bot\sync_agent\schedule\firebird_reader.py", line 67, in _connect
+    conn: fb.Connection = fb.connect(
+                          ^^^^^^^^^^^
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\firebird\driver\core.py", line 2159, in connect
+    return __make_connection(False, dsn, db_config.utf8filename.value, dpb.get_buffer(),
+                                                                       ^^^^^^^^^^^^^^^^
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\firebird\driver\core.py", line 613, in get_buffer
+    with a.get_api().util.get_xpb_builder(XpbKind.DPB) as dpb:
+         ^^^^^^^^^^^
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\firebird\driver\fbapi.py", line 2232, in get_api
+    load_api()
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\firebird\driver\fbapi.py", line 2223, in load_api
+    _api = FirebirdAPI(filename)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\firebird\driver\fbapi.py", line 2045, in __init__
+    self.client_library: ctypes.CDLL = ctypes.WinDLL(str(filename))
+                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.11_3.11.2544.0_x64__qbz5n2kfra8p0\Lib\ctypes\__init__.py", line 376, in __init__
+    self._handle = _dlopen(self._name, mode)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+OSError: [WinError 193] %1 is not a valid Win32 application
+2026-05-28 17:28:47,233 - INFO - Sleeping for 300 seconds before next cycle
+2026-05-28 17:29:23,926 - INFO - Sync agent shutting down due to keyboard interrupt
+2026-05-28 17:43:28,122 - INFO - Sync agent starting up
+2026-05-28 17:43:28,122 - INFO - Starting sync cycle
+2026-05-28 17:43:28,128 - ERROR - Error during sync cycle: function 'fb_get_master_interface' not found
+Traceback (most recent call last):
+  File "C:\Users\xiadito\Desktop\WhatsappBot\whatsapp_bot\sync_agent\schedule\main.py", line 61, in run_one_cycle
+    products = reader.fetch_products()
+               ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\xiadito\Desktop\WhatsappBot\whatsapp_bot\sync_agent\schedule\firebird_reader.py", line 85, in fetch_products
+    with self._connect() as conn:
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.11_3.11.2544.0_x64__qbz5n2kfra8p0\Lib\contextlib.py", line 137, in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+  File "C:\Users\xiadito\Desktop\WhatsappBot\whatsapp_bot\sync_agent\schedule\firebird_reader.py", line 67, in _connect
+    conn: fb.Connection = fb.connect(
+                          ^^^^^^^^^^^
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\firebird\driver\core.py", line 2159, in connect
+    return __make_connection(False, dsn, db_config.utf8filename.value, dpb.get_buffer(),
+                                                                       ^^^^^^^^^^^^^^^^
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\firebird\driver\core.py", line 613, in get_buffer
+    with a.get_api().util.get_xpb_builder(XpbKind.DPB) as dpb:
+         ^^^^^^^^^^^
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\firebird\driver\fbapi.py", line 2232, in get_api
+    load_api()
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\firebird\driver\fbapi.py", line 2223, in load_api
+    _api = FirebirdAPI(filename)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\firebird\driver\fbapi.py", line 2051, in __init__
+    self.fb_get_master_interface = (self.client_library.fb_get_master_interface)
+                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.11_3.11.2544.0_x64__qbz5n2kfra8p0\Lib\ctypes\__init__.py", line 389, in __getattr__
+    func = self.__getitem__(name)
+           ^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\WindowsApps\PythonSoftwareFoundation.Python.3.11_3.11.2544.0_x64__qbz5n2kfra8p0\Lib\ctypes\__init__.py", line 394, in __getitem__
+    func = self._FuncPtr((name_or_ordinal, self))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: function 'fb_get_master_interface' not found
+2026-05-28 17:43:28,131 - INFO - Sleeping for 300 seconds before next cycle
+2026-05-28 17:44:10,385 - INFO - Sync agent shutting down due to keyboard interrupt
+2026-05-28 17:51:01,917 - INFO - Sync agent starting up
+2026-05-28 17:51:01,917 - INFO - Starting sync cycle
+2026-05-28 17:51:02,046 - ERROR - Error during sync cycle: ('Error while preparing SQL statement:\n- SQLCODE: -206\n- Dynamic SQL Error\n- SQL error code = -206\n- Column unknown\n- CATEGORIA\n- At line 5, column 31', -206, 335544569)
+Traceback (most recent call last):
+  File "C:\Users\xiadito\Desktop\WhatsappBot\whatsapp_bot\sync_agent\schedule\main.py", line 56, in run_one_cycle
+    products = reader.fetch_products()
+               ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\xiadito\Desktop\WhatsappBot\whatsapp_bot\sync_agent\schedule\firebird_reader.py", line 90, in fetch_products
+    cur.execute("""
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\fdb\fbcore.py", line 3698, in execute
+    self._ps = PreparedStatement(operation, self, True)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\xiadito\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\fdb\fbcore.py", line 2313, in __init__
+    raise exception_from_status(DatabaseError, self._isc_status,
+fdb.fbcore.DatabaseError: ('Error while preparing SQL statement:\n- SQLCODE: -206\n- Dynamic SQL Error\n- SQL error code = -206\n- Column unknown\n- CATEGORIA\n- At line 5, column 31', -206, 335544569)
+2026-05-28 17:51:02,048 - INFO - Sleeping for 300 seconds before next cycle
+2026-05-28 17:52:10,514 - INFO - Sync agent shutting down due to keyboard interrupt
+2026-05-28 17:52:12,042 - INFO - Sync agent starting up
+2026-05-28 17:52:12,046 - INFO - Starting sync cycle
+2026-05-28 17:52:12,079 - INFO - Fetched 6 products from POS database
+2026-05-28 17:52:12,192 - INFO - Sync completed: 6 upserted, 0 deactivated
+2026-05-28 17:52:12,192 - INFO - Sync cycle completed successfully
+2026-05-28 17:52:12,192 - INFO - Sleeping for 300 seconds before next cycle
+2026-05-28 17:57:12,194 - INFO - Starting sync cycle
+2026-05-28 17:57:12,217 - INFO - Fetched 6 products from POS database
+2026-05-28 17:57:12,264 - INFO - Sync completed: 6 upserted, 0 deactivated
+2026-05-28 17:57:12,265 - INFO - Sync cycle completed successfully
+2026-05-28 17:57:12,265 - INFO - Sleeping for 300 seconds before next cycle
+2026-05-28 18:02:12,267 - INFO - Starting sync cycle
+2026-05-28 18:02:12,349 - INFO - Fetched 6 products from POS database
+2026-05-28 18:02:12,395 - INFO - Sync completed: 6 upserted, 0 deactivated
+2026-05-28 18:02:12,396 - INFO - Sync cycle completed successfully
+2026-05-28 18:02:12,396 - INFO - Sleeping for 300 seconds before next cycle
+2026-05-28 18:07:12,397 - INFO - Starting sync cycle
+2026-05-28 18:07:12,422 - INFO - Fetched 6 products from POS database
+2026-05-28 18:07:12,469 - INFO - Sync completed: 6 upserted, 0 deactivated
+2026-05-28 18:07:12,470 - INFO - Sync cycle completed successfully
+2026-05-28 18:07:12,471 - INFO - Sleeping for 300 seconds before next cycle
+2026-05-28 18:07:56,260 - INFO - Sync agent shutting down due to keyboard interrupt

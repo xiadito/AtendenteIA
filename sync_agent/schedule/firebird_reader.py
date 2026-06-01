@@ -9,15 +9,14 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Iterator, List, Optional
-
-import firebird.driver as fb
+import fdb
 
 logger: logging.Logger = logging.getLogger(__name__)
 
 # ============================================================
 # PLACEHOLDER QUERY — UPDATE AFTER SCHEMA DISCOVERY
 # ============================================================
-# Expected output columns (in this order):
+# /cleapected output columns (in this order):
 #   1. external_id     — stable unique identifier from the POS
 #   2. code            — SKU or barcode (may be NULL)
 #   3. name            — product display name
@@ -55,17 +54,21 @@ class FirebirdReader:
             charset: str = "WIN1252",
     ):
         # DSN format expected by firebird-driver: "host/port:database_path"
-        self.dsn = f"{host}/{port}:{database}"
+        self.host = host
+        self.port = port
+        self.database = database
         self.user = user
         self.password = password
         self.charset = charset
         
     @contextmanager
-    def _connect(self) -> Iterator[fb.Connection]:
+    def _connect(self) -> Iterator[fdb.Connection]:
         """Open a Firebird connection bound to a 'with' block."""
         
-        conn: fb.Connection = fb.connect(
-            self.dsn,
+        conn: fdb.Connection = fdb.connect(
+            host=self.host,
+            port=self.port,
+            database=self.database,
             user=self.user,
             password=self.password,
             charset=self.charset,
@@ -83,16 +86,15 @@ class FirebirdReader:
         """
         
         with self._connect() as conn:
-            cur = conn.cursor()
+            cur: fdb.Cursor = conn.cursor()
             cur.execute("""
                 SELECT 
-                    ID AS EXTERNAL_ID,
-                    CODIGO AS CODE,
-                    DESCRICAO AS NAME,
-                    PRECO AS PRICE,
-                    ESTOQUE AS STOCK_QUANTITY,
-                    CATEGORIA AS CATEGORY
-                FROM PRODUTO
+                    PRODUCT_ID AS EXTERNAL_ID,
+                    NAME AS NAME,
+                    CATEGORY AS CATEGORY,
+                    PRICE AS PRICE,
+                    STOCK_QTY AS STOCK_QUANTITY
+                FROM PRODUCT
                 """
             )
             rows: list[tuple] = cur.fetchall()
@@ -106,11 +108,11 @@ class FirebirdReader:
     def _row_to_product(row: tuple) -> ProductRecord:
         """Map a raw cursor row to a type ProductRecord."""
         
-        raw_external_id, raw_code, raw_name, raw_price, raw_stock_quantity, raw_category = row
+        raw_external_id, raw_name, raw_category, raw_price, raw_stock_quantity = row
         
         return ProductRecord(
             external_id = int(raw_external_id),
-            code = str(raw_code).strip() if raw_code is not None else None,
+            code = None,  # Placeholder: map the code/SKU column if available
             name = str(raw_name).strip(),
             price = Decimal(str(raw_price)) if raw_price is not None else Decimal("0.00"),
             stock_quantity = Decimal(str(raw_stock_quantity)) if raw_stock_quantity is not None else Decimal("0.00"),

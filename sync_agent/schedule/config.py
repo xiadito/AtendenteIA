@@ -10,6 +10,7 @@ class Config:
     FIREBIRD_USER = os.getenv("FIREBIRD_USER", "sysdba")
     FIREBIRD_PASSWORD = os.getenv("FIREBIRD_PASSWORD", "masterkey")
     FIREBIRD_CHARSET = os.getenv("FIREBIRD_CHARSET", "WIN1252")
+    FIREBIRD_LIBRARY_PATH = os.getenv("FIREBIRD_LIBRARY_PATH")  # Optional: specify path to fbclient.dll if needed
     
     DATABASE_URL = os.getenv("DATABASE_URL")
     

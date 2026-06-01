@@ -20,9 +20,9 @@ CREATE TABLE IF NOT EXISTS products (
     stock_quantity NUMERIC(12, 3) NOT NULL DEFAULT 0,
     category VARCHAR(255),
     is_active BOOLEAN NOT NULL DEFAULT TRUE,  -- Soft-delete flag
-    last_synced_at TIMESTAMPZ NOT NULL DEFAULT NOW(),  -- Timestamp of the last sync update
+    last_synced_at TIMESTAMPTZ NOT NULL DEFAULT NOW()  -- Timestamp of the last sync update
 );
 
-CREATE INDEX idx_products_external_id ON products (external_id);
-CREATE INDEX idx_products_is_active ON products (is_active);
-CREATE INDEX idx_products_category ON products (category); 
+CREATE INDEX IF NOT EXISTS idx_products_external_id ON products (external_id);
+CREATE INDEX IF NOT EXISTS idx_products_is_active ON products (is_active);
+CREATE INDEX IF NOT EXISTS idx_products_category ON products (category);
