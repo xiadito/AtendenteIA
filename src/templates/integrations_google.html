@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mercadinho da Vila — Integração Google Calendar</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/theme.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/integrations.css') }}">
+</head>
+<body>
+    <button class="theme-toggle" id="themeBtn" onclick="toggleTheme()">🌙 Escuro</button>
+    <div class="card">
+        <h1>Integração com Google Calendar</h1>
+
+        {% if error %}
+            <div class="error">{{ error }}</div>
+        {% endif %}
+
+        {% if owner and owner.integration_status == "connected" %}
+            <span class="badge badge-connected">Conectado</span>
+            <p>Conta Google: <strong>{{ owner.google_email }}</strong></p>
+            <p>Calendário: <strong>Aulas Experimentais</strong></p>
+            <form method="POST" action="{{ url_for('integrations.google_disconnect') }}">
+                <button type="submit" class="btn-action danger">Desconectar</button>
+            </form>
+        {% elif owner and owner.integration_status == "needs_reconnect" %}
+            <span class="badge badge-needs-reconnect">Reconexão necessária</span>
+            <p>A conexão com sua conta Google expirou ou foi revogada. Reconecte para continuar agendando aulas experimentais.</p>
+            <a href="{{ url_for('integrations.google_connect') }}">
+                <button type="button" class="btn-action">Reconectar Google Calendar</button>
+            </a>
+        {% else %}
+            <span class="badge badge-disconnected">Não conectado</span>
+            <p class="empty-state">Conecte sua conta Google para sincronizar as aulas experimentais com o Google Calendar.</p>
+            <a href="{{ url_for('integrations.google_connect') }}">
+                <button type="button" class="btn-action">Conectar Google Calendar</button>
+            </a>
+        {% endif %}
+    </div>
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+</body>
+</html>

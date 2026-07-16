@@ -1,6 +1,7 @@
 from flask import Flask
 from config import Config
 from webhook.routes import webhook_bp, dashboard_bp
+from integrations.routes import integrations_bp
 
 
 from database.seed import seed_fake_orders
@@ -23,6 +24,7 @@ def create_app():
     # Register blueprints (modulos de rota)
     app.register_blueprint(webhook_bp)
     app.register_blueprint(dashboard_bp, url_prefix="/dashboard")
+    app.register_blueprint(integrations_bp, url_prefix="/integrations")
    
     
     #print("all orders:", get_all_orders())

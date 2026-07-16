@@ -1,0 +1,63 @@
+body {
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    padding-top: 4rem;
+}
+
+.card {
+    background: var(--surface);
+    padding: 2rem;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    width: 100%;
+    max-width: 420px;
+}
+
+h1 {
+    font-size: 1.2rem;
+    margin-bottom: 1.5rem;
+    color: var(--text);
+    text-align: center;
+}
+
+p { color: var(--text); }
+
+.badge {
+    display: inline-block;
+    padding: 0.2rem 0.6rem;
+    border-radius: 12px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    margin-bottom: 1rem;
+}
+
+.badge-connected       { background: #d4edda; color: #155724; } /* green  */
+.badge-disconnected    { background: #f0f0f0; color: #666666; } /* gray   */
+.badge-needs-reconnect { background: #fff3cd; color: #856404; } /* yellow */
+
+.btn-action {
+    background: none;
+    border: 1px solid #aaa;
+    color: #555;
+    padding: 0.5rem 1rem;
+    border-radius: 4px;
+    font-size: 0.9rem;
+    cursor: pointer;
+}
+
+.btn-action:hover  { background: #f0f0f0; }
+.btn-action.danger { border-color: #c0392b; color: #c0392b; }
+.btn-action.danger:hover { background: #fdf0ef; }
+
+.empty-state {
+    text-align: center;
+    color: #aaa;
+    font-size: 0.9rem;
+}
+
+.error {
+    color: #c0392b;
+    font-size: 0.9rem;
+    margin-bottom: 1rem;
+}
