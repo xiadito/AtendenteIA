@@ -25,9 +25,16 @@ def google_status():
 def google_connect():
     """Generate the CSRF state, store it in the Flask session and redirect to Google."""
     state: str = secrets.token_urlsafe(32)
-    session["oauth_state"] = state
 
-    authorization_url: str = google_calendar.build_authorization_url(state)
+    authorization_url: str
+    code_verifier: str
+    authorization_url, code_verifier = google_calendar.build_authorization_url(state)
+
+    # Both values must survive until the callback: state proves the callback is
+    # ours (CSRF), code_verifier proves to Google we started the flow (PKCE).
+    session["oauth_state"] = state
+    session["oauth_code_verifier"] = code_verifier
+
     return redirect(authorization_url)
 
 
@@ -36,9 +43,10 @@ def google_connect():
 def google_callback():
     """Handle Google's OAuth redirect: validate state, exchange code, persist credentials."""
     expected_state: str | None = session.pop("oauth_state", None)
+    code_verifier: str | None = session.pop("oauth_code_verifier", None)
     returned_state: str | None = request.args.get("state")
 
-    if not expected_state or expected_state != returned_state:
+    if not expected_state or expected_state != returned_state or not code_verifier:
         logger.warning("OAuth state mismatch or missing on Google callback.")
         return render_template(
             "integrations_google.html",
@@ -56,7 +64,7 @@ def google_callback():
         )
 
     try:
-        refresh_token, google_email, calendar_id = google_calendar.exchange_code_for_tokens(code)
+        refresh_token, google_email, calendar_id = google_calendar.exchange_code_for_tokens(code, code_verifier)
     except Exception as exc:
         logger.error("Failed to complete Google OAuth callback: %s", exc)
         return render_template(

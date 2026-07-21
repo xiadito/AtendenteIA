@@ -10,6 +10,9 @@ All commands run from the `src/` directory with the virtualenv activated:
 # Activate virtualenv (Windows)
 venv\Scripts\activate
 
+# deactivate virtualenv (Windows)
+deactivate
+
 # Install dependencies
 pip install -r requirements.txt
 
@@ -24,7 +27,7 @@ There are no automated tests currently.
 
 ## Architecture Overview
 
-This is a **WhatsApp chatbot** for a grocery store ("Mercadinho da Vila") built with Flask and deployed on Railway. It uses **Twilio Sandbox** for WhatsApp messaging (not the Meta Cloud API directly — the Meta webhook code exists but is commented out in `routes.py`).
+This is a **WhatsApp chatbot focused on closing leads** for Jiu-Jitsu academys built with Flask and deployed on Railway. It uses **Twilio Sandbox** for WhatsApp messaging (not the Meta Cloud API directly — the Meta webhook code exists but is commented out in `routes.py`).
 
 ### Request Flow
 

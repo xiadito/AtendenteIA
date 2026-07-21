@@ -156,7 +156,7 @@ def receive_twilio() -> tuple:
 
 @webhook_bp.route("/", methods=["GET"])
 def initial_message():
-    return render_template("home.html")
+    return redirect(url_for("dashboard.menu"))
 
 
 @webhook_bp.route("/status", methods=["GET"])
