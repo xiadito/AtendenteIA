@@ -4,7 +4,6 @@ from config import Config
 import logging
 import threading
 from whatsapp.whatsapp_service import send_message
-from webhook.templates import receive_initial_message
 from bot.handlers import handle_text_message
 import bot.session as store
 

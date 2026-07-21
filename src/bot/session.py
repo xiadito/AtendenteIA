@@ -6,28 +6,6 @@ from database.db import get_connection
 
 logger = logging.getLogger(__name__)
 
-#In-memory session store
-#Key: client number, Value: session data (dict)
-# this will be replaced by a database
-_sessions: dict[str, dict] = {}
-
-#EXAMPLE SESSION
-#_sessions = {
-#     "5521999887766": {
-#         "history": [{"role": "user/assistant", "content": "message"}],
-#         "order": [
-#             {
-#                 "id":         "123e4567-e89b-12d3-a456-426614174000", #UUID4 string
-#                 "sender":     "5521999887766",
-#                 "items":      [{"name": "Arroz", "price": 5.99, "quantity": 2}],
-#                 "total":      11.98,
-#                 "status":     "pending",
-#                 "created_at": "2026-05-07T10:00:00",
-#             }
-#         ],
-#     }
-# }
-
 valid_order_statuses: set[str] = {
     "pending",    # Order confirmed by customer, awaiting store acknowledgment
     "confirmed",  # Store owner acknowledged the order

@@ -1,11 +1,11 @@
 import bot.session as store
-import config
+from config import Config
 
 def seed_fake_orders() -> None:
     """
     Populate the session store with fake orders for dashboard testing.
     """
-    if config.FLASK_ENV != "development":
+    if Config.FLASK_ENV != "development":
         print("Skipping seeding fake orders in non-development environment.")
         return
     

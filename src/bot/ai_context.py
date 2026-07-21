@@ -123,6 +123,6 @@ ORDER_CONFIRMED:
   "status": "pending"
 }}
 
-PRODUCT CATALOG:
-{write_categories(categories)}
+STORE INFORMATION — use these values verbatim, never invent them:
+{store_context}
 """
