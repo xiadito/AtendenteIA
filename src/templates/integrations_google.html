@@ -10,6 +10,7 @@
 <body>
     <button class="theme-toggle" id="themeBtn" onclick="toggleTheme()">🌙 Escuro</button>
     <div class="card">
+        <a class="back-link" href="{{ url_for('dashboard.menu') }}">← Menu</a>
         <h1>Integração com Google Calendar</h1>
 
         {% if error %}

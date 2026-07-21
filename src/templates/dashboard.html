@@ -25,7 +25,10 @@
 
     <button class="theme-toggle" id="themeBtn" onclick="toggleTheme()">🌙 Escuro</button>
     <header>
-        <h1>🛒 Pedidos — Mercadinho da Vila</h1>
+        <div class="header-left">
+            <a class="back-link" href="{{ url_for('dashboard.menu') }}">← Menu</a>
+            <h1>🛒 Pedidos — Mercadinho da Vila</h1>
+        </div>
     </header>
 
     <div class="summary">

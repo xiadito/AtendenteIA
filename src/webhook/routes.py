@@ -189,7 +189,7 @@ def login():
 
         if password == expected:
             session["dashboard_authenticated"] = True
-            return redirect(url_for("dashboard.index"))
+            return redirect(url_for("dashboard.menu"))
         else:
             error = "Senha incorreta. Tente novamente."
             logger.warning("Tentativa de login com senha incorreta.")
@@ -201,6 +201,12 @@ def logout():
     """ Clear the current session and redirects to the login page."""
     session.pop("dashboard_authenticated", None)
     return redirect(url_for("dashboard.login"))
+
+@dashboard_bp.route("/menu")
+@_require_auth
+def menu():
+    """Hub de navegação pós-login: pedidos, integrações e futuras features."""
+    return render_template("menu.html")
 
 @dashboard_bp.route("/index")
 @_require_auth

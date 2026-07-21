@@ -11,6 +11,21 @@ header {
 
 h1 { font-size: 1.3rem; margin: 0; }
 
+.header-left {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.back-link {
+    font-size: 0.85rem;
+    color: #888;
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+.back-link:hover { color: var(--text); }
+
 .page-footer {
     text-align: center;
     padding: 2rem 0 1.5rem;

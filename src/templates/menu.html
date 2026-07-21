@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mercadinho da Vila — Menu</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/theme.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/menu.css') }}">
+</head>
+<body>
+    <button class="theme-toggle" id="themeBtn" onclick="toggleTheme()">🌙 Escuro</button>
+    <div class="card">
+        <h1>Mercadinho da Vila</h1>
+        <p class="subtitle">Painel de controle</p>
+
+        <nav class="menu-grid">
+            <a class="menu-item" href="{{ url_for('dashboard.index') }}">
+                <span class="menu-icon">📦</span>
+                <span class="menu-label">Pedidos</span>
+                <span class="menu-desc">Ver e atualizar os pedidos recebidos</span>
+            </a>
+
+            <a class="menu-item" href="{{ url_for('integrations.google_status') }}">
+                <span class="menu-icon">📅</span>
+                <span class="menu-label">Autenticação Google</span>
+                <span class="menu-desc">Conectar e gerenciar o Google Calendar</span>
+            </a>
+
+            <div class="menu-item disabled" aria-disabled="true">
+                <span class="menu-icon">✨</span>
+                <span class="menu-label">Mais features</span>
+                <span class="menu-desc">Em breve</span>
+            </div>
+        </nav>
+
+        <a class="logout-link" href="{{ url_for('dashboard.logout') }}">Sair</a>
+    </div>
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+</body>
+</html>
