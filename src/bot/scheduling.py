@@ -187,3 +187,109 @@ def get_available_slots(days_ahead: int = 14) -> list[dict]:
         })
 
     return slots
+
+
+def book_slot(event_id: str, lead: dict[str, str]) -> dict:
+    """Book a lead into a Calendar event's slot.
+
+    Postgres is written first, under create_booking_with_lock()'s advisory
+    lock, and only then is the Calendar event patched. If the patch fails
+    after the booking was already committed, the booking still stands and
+    still counts correctly (capacity is always computed from Postgres, never
+    from Calendar attendees) — the only consequence is that the event's
+    description/extendedProperties in Google fall out of sync until a later
+    booking (or a manual retry) refreshes them. That is surfaced via
+    calendar_synced, not by rolling back or raising.
+
+    Args:
+        event_id (str): Calendar event id, as returned by get_available_slots().
+        lead (dict[str, str]): Must contain "sender" (WhatsApp number, e.g.
+            "5521999999999") and "name" (lead's name, already resolved by the AI).
+
+    Returns:
+        dict: On success, {"status": "created", "booking_id": str,
+        "calendar_synced": bool}. If Postgres rejected the booking before any
+        Calendar call was made: {"status": "full", "active_count": int} or
+        {"status": "duplicate"}. If the integration itself is unusable:
+        {"status": "integration_not_connected"} or {"status": "needs_reconnect"}
+        (mark_needs_reconnect() has already run in the latter case).
+    """
+    try:
+        service, calendar_id = _get_service_or_raise()
+    except IntegrationNotConnectedError:
+        return {"status": "integration_not_connected"}
+    except IntegrationNeedsReconnectError:
+        return {"status": "needs_reconnect"}
+
+    event = service.events().get(calendarId=calendar_id, eventId=event_id).execute()
+    class_type = _parse_class_type(event.get("summary", ""))
+    capacity = CLASS_CAPACITY[class_type]
+    start = _parse_rfc3339(event["start"]["dateTime"])
+    end = _parse_rfc3339(event["end"]["dateTime"])
+
+    result = bookings.create_booking_with_lock(
+        calendar_event_id=event_id,
+        sender=lead["sender"],
+        lead_name=lead["name"],
+        class_type=class_type,
+        slot_start=start,
+        slot_end=end,
+        capacity=capacity,
+    )
+
+    if result["status"] != "created":
+        return result
+
+    try:
+        _patch_event_with_booking(service, calendar_id, event, lead, result["active_count"])
+        result["calendar_synced"] = True
+    except Exception:
+        logger.exception(
+            "Booking %s was committed to Postgres but the Calendar patch failed for event %s.",
+            result["booking_id"], event_id,
+        )
+        result["calendar_synced"] = False
+
+    return result
+
+
+def _patch_event_with_booking(
+    service: Any,
+    calendar_id: str,
+    event: dict,
+    lead: dict[str, str],
+    booked_count: int,
+) -> None:
+    """Patch a Calendar event's description and metadata after a successful booking.
+
+    Appends the lead's info under a stable section marker instead of
+    overwriting the owner's original description, since more than one lead
+    can book the same event over time. corujai_booked_count is written to
+    extendedProperties.private, which is invisible in the Calendar UI and
+    unaffected by the owner editing the event by hand.
+
+    Args:
+        service (Any): Authenticated Calendar API client.
+        calendar_id (str): ID of the "Aulas Experimentais" calendar.
+        event (dict): The event resource fetched via events.get().
+        lead (dict[str, str]): Must contain "sender" and "name".
+        booked_count (int): Active booking count for this event, after the insert.
+    """
+    description = event.get("description") or ""
+    confirmed_at = datetime.now(TIMEZONE).strftime("%d/%m/%Y %H:%M")
+    booking_line = f"- {lead['name']} ({lead['sender']}) — confirmado em {confirmed_at}"
+
+    if BOOKING_SECTION_MARKER in description:
+        new_description = f"{description}\n{booking_line}"
+    else:
+        separator = "\n\n" if description else ""
+        new_description = f"{description}{separator}{BOOKING_SECTION_MARKER}\n{booking_line}"
+
+    service.events().patch(
+        calendarId=calendar_id,
+        eventId=event["id"],
+        body={
+            "description": new_description,
+            "extendedProperties": {"private": {"corujai_booked_count": str(booked_count)}},
+        },
+    ).execute()
