@@ -7,10 +7,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 The app runs from the `src/` directory, but `requirements.txt` lives at the **repo root**:
 
 ```bash
-# Activate virtualenv (Windows)
-venv\Scripts\activate
+# Activate virtualenv (Arch Linux / any Linux)
+source venv/bin/activate
 
-# deactivate virtualenv (Windows)
+# deactivate virtualenv
 deactivate
 
 # Install dependencies (from the repo root)
@@ -39,7 +39,7 @@ are independent.
 
 ## Architecture Overview
 
-This is a **WhatsApp chatbot focused on closing leads** for Jiu-Jitsu academys built with Flask and deployed on Railway. It uses **Twilio Sandbox** for WhatsApp messaging (not the Meta Cloud API directly — the Meta webhook code exists but is commented out in `routes.py`).
+This is **Corujai**, a **WhatsApp chatbot focused on closing leads** for gyms (Jiu-Jitsu, CrossFit, weightlifting) built with Flask and deployed on Railway. It uses **Twilio Sandbox** for WhatsApp messaging (not the Meta Cloud API directly — the Meta webhook code exists but is commented out in `routes.py`).
 
 ### Request Flow
 
@@ -67,11 +67,11 @@ History is capped at the last 10 turns (`max_history_turns = 10`) to control tok
 
 ### AI Service
 
-`bot/ai_service.py` uses the **OpenAI SDK** pointed at a configurable base URL, making it compatible with both:
-- **Dev**: Ollama local server (e.g. `llama3.2`, `mistral`) via `AI_BASE_URL=http://localhost:11434/v1`
-- **Prod**: Anthropic-compatible endpoint (e.g. Claude Haiku 4.5) via `AI_BASE_URL=https://api.anthropic.com/v1`
-
-Switch between environments exclusively via env vars — no code changes required.
+`bot/ai_service.py` uses the **OpenAI SDK** pointed at a configurable base URL
+(`AI_BASE_URL`). Ollama has been abandoned — both dev and prod run against the
+Anthropic-compatible endpoint (`https://api.anthropic.com/v1/`) with Claude Haiku 4.5
+(`AI_MODEL=claude-haiku-4-5-20251001`). Switching providers, if ever needed again, is
+still just an env var change — no code changes required.
 
 ### Session Storage
 
@@ -181,8 +181,8 @@ Defined in `src/.env` and loaded via `config.py`:
 | `VERIFY_TOKEN` | Meta webhook verification token (GET /webhook) |
 | `FLASK_SECRET_KEY` | Flask session secret (required for dashboard auth) |
 | `DASHBOARD_PASSWORD` | Plain-text password for the dashboard login |
-| `AI_BASE_URL` | LLM endpoint — Ollama or Anthropic-compatible |
-| `AI_MODEL` | Model name (e.g. `llama3.2`, `claude-haiku-4-5-20251001`) |
+| `AI_BASE_URL` | LLM endpoint — Anthropic-compatible (e.g. `https://api.anthropic.com/v1/`) |
+| `AI_MODEL` | Model name (e.g. `claude-haiku-4-5-20251001`) |
 | `AI_API_KEY` | API key for the LLM provider |
 | `DATABASE_URL` | Postgres URL — required; `init_db()` and every session/order query use it |
 | `GOOGLE_CLIENT_ID` | Google Cloud OAuth client ID |
@@ -193,12 +193,26 @@ Defined in `src/.env` and loaded via `config.py`:
 | `WHATSAPP_TOKEN` | Meta Cloud API token (currently unused) |
 | `WHATSAPP_PHONE_NUMBER_ID` | Meta Cloud API phone ID (currently unused) |
 
+## Roadmap
+
+- **Module 1 (done)** — Google Calendar OAuth onboarding (`integrations/`): connect flow,
+  token storage in `owners`, PKCE. See `GOOGLE_CALENDAR_OAUTH_TESTING.md`.
+- **Module 2 (this one)** — Scheduling engine (`bot/scheduling.py`, `bot/bookings.py`):
+  pure functions that read free slots from the owner's calendar and book a trial class
+  into Postgres. Not yet wired to the AI. See `SCHEDULING_ENGINE_TESTING.md`.
+- **Module 3 (future)** — Wires the scheduling engine into the AI conversation (two-layer
+  system prompt rewrite in `bot/ai_context.py`), so the LLM can call `get_available_slots()`
+  / `book_slot()` mid-conversation.
+
 ## Known Issues / TODOs
 
 - `database/seed.py::seed_fake_orders()` is imported in `app.py` but its call is commented out. It is now safe to re-enable (it guards on `Config.FLASK_ENV == "development"` and skips when orders already exist), but it writes real rows to Postgres — keep it commented in production.
 - Dead code still present from the pre-AI state machine: `bot/session.py::clear_session()` / `get_all_sessions()` (the latter is only reachable from the former), `bot/ai_service.py::update_order_status()` (a body-less stub that shadows the real one in `session.py`), and the commented-out Meta `receive()` route in `webhook/routes.py`.
 - `VERIFY_TOKEN` and `GET /webhook` exist only for the Meta Cloud API, which is not in use.
-- Module 2 scaffolding in `integrations/` is intentionally unreachable: `get_calendar_service()` is never called, and `NeedsReconnectError` is raised but never caught (so `mark_needs_reconnect()` never fires).
+- Module 2 scaffolding in `integrations/` is intentionally unreachable: `get_calendar_service()` is never called, and `NeedsReconnectError` is raised but never caught (so `mark_needs_reconnect()` never fires). This changes with Module 2's `bot/scheduling.py`, which is the first real caller of both.
+- `config.py` and `.env.example` still default `DATABASE_URL` to a `mercadinho_dev` database name — a naming leftover from the pre-pivot product, harmless but stale.
+- `sync_agent/schedule/sync_agent.log` is committed to git — a runtime log file that shouldn't be tracked.
+- `integrations/routes.py::google_callback` is guarded by `@_require_auth`. If the dashboard session expires between `/connect` and `/callback` (two separate HTTP requests), Google's `code` is lost on the redirect to login. Rare in practice, but real.
 
 ## Deployment
 
