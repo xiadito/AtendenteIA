@@ -161,7 +161,7 @@ def initial_message():
 @webhook_bp.route("/status", methods=["GET"])
 def status():
     #Verificando Status
-    return jsonify({"status": "online", "bot": "mercadinho"}), 200
+    return jsonify({"status": "online", "bot": "corujai"}), 200
 
 
 dashboard_bp = Blueprint("dashboard", __name__)
