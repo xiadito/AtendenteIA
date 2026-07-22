@@ -196,10 +196,10 @@ Defined in `src/.env` and loaded via `config.py`:
 ## Roadmap
 
 - **Module 1 (done)** — Google Calendar OAuth onboarding (`integrations/`): connect flow,
-  token storage in `owners`, PKCE. See `GOOGLE_CALENDAR_OAUTH_TESTING.md`.
+  token storage in `owners`, PKCE. See `src/tests/GOOGLE_CALENDAR_OAUTH_TESTING.md`.
 - **Module 2 (this one)** — Scheduling engine (`bot/scheduling.py`, `bot/bookings.py`):
   pure functions that read free slots from the owner's calendar and book a trial class
-  into Postgres. Not yet wired to the AI. See `SCHEDULING_ENGINE_TESTING.md`.
+  into Postgres. Not yet wired to the AI. See `src/tests/test_scheduling/SCHEDULING_ENGINE_TESTING.md`.
 - **Module 3 (future)** — Wires the scheduling engine into the AI conversation (two-layer
   system prompt rewrite in `bot/ai_context.py`), so the LLM can call `get_available_slots()`
   / `book_slot()` mid-conversation.

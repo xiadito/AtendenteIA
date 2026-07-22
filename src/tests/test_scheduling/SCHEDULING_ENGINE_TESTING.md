@@ -3,7 +3,7 @@
 Este documento descreve como testar, de ponta a ponta, o motor de agendamento
 implementado no Módulo 2: as funções que leem vagas livres no Google Calendar do dono
 e efetivam o agendamento de uma aula experimental no Postgres. O motor ainda não é
-chamado pela IA — quem o exercita aqui é o script manual `scripts/test_scheduling.py`.
+chamado pela IA — quem o exercita aqui é o script manual `tests/test_scheduling/test_scheduling.py`.
 Este documento é auto-contido: quem for executar os testes não precisa ter
 acompanhado a conversa de desenvolvimento.
 
@@ -67,14 +67,14 @@ skipping` (nas subidas seguintes).
 
 Todos os comandos abaixo rodam a partir de `src/`:
 ```bash
-python scripts/test_scheduling.py list
-python scripts/test_scheduling.py book <event_id> --sender <telefone> --name <nome>
+python tests/test_scheduling/test_scheduling.py list
+python tests/test_scheduling/test_scheduling.py book <event_id> --sender <telefone> --name <nome>
 ```
 
 ### 1. Listar slots com o calendário vazio
 
 **O que fazer:** antes de criar qualquer evento (ou temporariamente esvaziando o
-calendário "Aulas Experimentais"), rode `python scripts/test_scheduling.py list`.
+calendário "Aulas Experimentais"), rode `python tests/test_scheduling/test_scheduling.py list`.
 
 **O que esperar:** saída `Nenhuma vaga disponível.`, sem erro.
 
@@ -98,7 +98,7 @@ seguintes.
 
 **O que fazer:**
 ```bash
-python scripts/test_scheduling.py book <event_id_baby> --sender 5521900000001 --name "Ana"
+python tests/test_scheduling/test_scheduling.py book <event_id_baby> --sender 5521900000001 --name "Ana"
 ```
 
 **O que esperar:** saída com `'status': 'created'`, `'calendar_synced': True`. Rode
@@ -115,7 +115,7 @@ Esperado: uma linha, `status = 'pending_confirmation'`.
 
 **O que fazer:**
 ```bash
-python scripts/test_scheduling.py book <event_id_baby> --sender 5521900000002 --name "Beto"
+python tests/test_scheduling/test_scheduling.py book <event_id_baby> --sender 5521900000002 --name "Beto"
 ```
 
 **O que esperar:** `'status': 'created'`. Rode `list` — o slot `[BABY]` **não aparece
@@ -127,7 +127,7 @@ mais** (2/2 ocupado).
 
 **O que fazer:**
 ```bash
-python scripts/test_scheduling.py book <event_id_baby> --sender 5521900000003 --name "Carla"
+python tests/test_scheduling/test_scheduling.py book <event_id_baby> --sender 5521900000003 --name "Carla"
 ```
 
 **O que esperar:** saída `{'status': 'full', 'active_count': 2}`. Nenhuma chamada ao
@@ -152,8 +152,8 @@ Confirme com `list` que o slot volta a aparecer com `vagas restantes: 1`.
   `cd src`. Digite os dois comandos abaixo em cada terminal **sem apertar Enter ainda**,
   e aperte Enter nos dois o mais próximo possível um do outro:
   ```bash
-  python scripts/test_scheduling.py book <event_id_baby> --sender 5521900000010 --name "Racer1"
-  python scripts/test_scheduling.py book <event_id_baby> --sender 5521900000011 --name "Racer2"
+  python tests/test_scheduling/test_scheduling.py book <event_id_baby> --sender 5521900000010 --name "Racer1"
+  python tests/test_scheduling/test_scheduling.py book <event_id_baby> --sender 5521900000011 --name "Racer2"
   ```
 - **Duas threads:** alternativa mais confiável (elimina a variável humana), rode um
   script Python ad-hoc que chama `bot.scheduling.book_slot` de duas threads
@@ -170,8 +170,8 @@ outra retorna `'status': 'full'`.
 **O que fazer:** escolha um sender que já tem reserva ativa em um slot com vaga (ex.: a
 aula de crianças) e tente reservar de novo:
 ```bash
-python scripts/test_scheduling.py book <event_id_criancas> --sender 5521900000001 --name "Ana"
-python scripts/test_scheduling.py book <event_id_criancas> --sender 5521900000001 --name "Ana"
+python tests/test_scheduling/test_scheduling.py book <event_id_criancas> --sender 5521900000001 --name "Ana"
+python tests/test_scheduling/test_scheduling.py book <event_id_criancas> --sender 5521900000001 --name "Ana"
 ```
 
 **O que esperar:** a primeira chamada retorna `'status': 'created'`; a segunda retorna
@@ -229,7 +229,7 @@ prova que cada instância tem capacidade própria, não compartilhada.
 `https://myaccount.google.com/permissions` (mesmo procedimento do passo 7 do
 `GOOGLE_CALENDAR_OAUTH_TESTING.md`). Em seguida rode:
 ```bash
-python scripts/test_scheduling.py list
+python tests/test_scheduling/test_scheduling.py list
 ```
 
 **O que esperar:** a mensagem limpa `O Google recusou o token salvo; reconecte em
@@ -248,7 +248,7 @@ continuar os próximos testes.
 ```sql
 UPDATE owners SET integration_status = 'disconnected' WHERE tenant_id = 'default';
 ```
-Rode `python scripts/test_scheduling.py list`.
+Rode `python tests/test_scheduling/test_scheduling.py list`.
 
 **O que esperar:** mensagem limpa `Integração com o Google Calendar não está conectada.
 Acesse /integrations/google para conectar.`, sem traceback e **sem nenhuma chamada à
