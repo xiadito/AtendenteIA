@@ -205,14 +205,19 @@ def book_slot(event_id: str, lead: dict[str, str]) -> dict:
         event_id (str): Calendar event id, as returned by get_available_slots().
         lead (dict[str, str]): Must contain "sender" (WhatsApp number, e.g.
             "5521999999999") and "name" (lead's name, already resolved by the AI).
+            For [BABY]/[CRIANCAS] slots it must also carry "child_name" (the child
+            who attends); the responsible adult stays in "name".
 
     Returns:
         dict: On success, {"status": "created", "booking_id": str,
-        "calendar_synced": bool}. If Postgres rejected the booking before any
-        Calendar call was made: {"status": "full", "active_count": int} or
-        {"status": "duplicate"}. If the integration itself is unusable:
-        {"status": "integration_not_connected"} or {"status": "needs_reconnect"}
-        (mark_needs_reconnect() has already run in the latter case).
+        "active_count": int, "calendar_synced": bool}. If Postgres rejected the
+        booking before any Calendar call was made: {"status": "full",
+        "active_count": int} or {"status": "duplicate"}. If a child class was
+        booked without a child's name: {"status": "missing_child_name"} (the
+        conversation stays alive and asks for the name). If the integration
+        itself is unusable: {"status": "integration_not_connected"} or
+        {"status": "needs_reconnect"} (mark_needs_reconnect() has already run in
+        the latter case).
     """
     try:
         service, calendar_id = _get_service_or_raise()
@@ -227,6 +232,15 @@ def book_slot(event_id: str, lead: dict[str, str]) -> dict:
     start = _parse_rfc3339(event["start"]["dateTime"])
     end = _parse_rfc3339(event["end"]["dateTime"])
 
+    # Child classes require the child's name, and the check lives here (not just
+    # in the prompt) for the same reason event_id is validated in the handler:
+    # the code never trusts that the AI supplied a required field. Reject before
+    # touching Postgres so the conversation can go back and collect the name.
+    child_name = (lead.get("child_name") or "").strip()
+    if class_type in {"BABY", "CRIANCAS"} and not child_name:
+        logger.info("Booking rejected for event %s: %s class needs a child name.", event_id, class_type)
+        return {"status": "missing_child_name"}
+
     result = bookings.create_booking_with_lock(
         calendar_event_id=event_id,
         sender=lead["sender"],
@@ -235,13 +249,14 @@ def book_slot(event_id: str, lead: dict[str, str]) -> dict:
         slot_start=start,
         slot_end=end,
         capacity=capacity,
+        child_name=child_name or None,
     )
 
     if result["status"] != "created":
         return result
 
     try:
-        _patch_event_with_booking(service, calendar_id, event, lead, result["active_count"])
+        _patch_event_with_booking(service, calendar_id, event, lead, class_type, result["active_count"])
         result["calendar_synced"] = True
     except Exception:
         logger.exception(
@@ -258,6 +273,7 @@ def _patch_event_with_booking(
     calendar_id: str,
     event: dict,
     lead: dict[str, str],
+    class_type: str,
     booked_count: int,
 ) -> None:
     """Patch a Calendar event's description and metadata after a successful booking.
@@ -272,12 +288,19 @@ def _patch_event_with_booking(
         service (Any): Authenticated Calendar API client.
         calendar_id (str): ID of the "Aulas Experimentais" calendar.
         event (dict): The event resource fetched via events.get().
-        lead (dict[str, str]): Must contain "sender" and "name".
+        lead (dict[str, str]): Must contain "sender" and "name". For child
+            classes it also carries "child_name".
+        class_type (str): One of CLASS_CAPACITY's keys. Selects the line format:
+            child classes show the child first with the responsible adult noted.
         booked_count (int): Active booking count for this event, after the insert.
     """
     description = event.get("description") or ""
     confirmed_at = datetime.now(TIMEZONE).strftime("%d/%m/%Y %H:%M")
-    booking_line = f"- {lead['name']} ({lead['sender']}) — confirmado em {confirmed_at}"
+    child_name = (lead.get("child_name") or "").strip()
+    if class_type in {"BABY", "CRIANCAS"} and child_name:
+        booking_line = f"- {child_name} (resp.: {lead['name']} — {lead['sender']}) — confirmado em {confirmed_at}"
+    else:
+        booking_line = f"- {lead['name']} ({lead['sender']}) — confirmado em {confirmed_at}"
 
     if BOOKING_SECTION_MARKER in description:
         new_description = f"{description}\n{booking_line}"
