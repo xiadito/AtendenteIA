@@ -23,6 +23,34 @@ cd src && python app.py          # Flask dev server on port 5000
 cd src && gunicorn "app:create_app()"
 ```
 
+### Local database setup
+
+One-time, before the first run. The app never creates its own database or role — it only
+applies migrations to a database that already exists:
+
+```bash
+# 1. Create the database and a dedicated non-superuser role
+psql -U postgres -c "CREATE DATABASE corujai;"
+psql -U postgres -c "CREATE ROLE corujai_app WITH LOGIN PASSWORD 'sua_senha';"
+psql -U postgres -c "ALTER DATABASE corujai OWNER TO corujai_app;"
+
+# 2. Point src/.env at it
+#    DATABASE_URL="postgresql://corujai_app:sua_senha@localhost:5432/corujai"
+
+# 3. First `python app.py` applies the migrations; verify:
+psql "$DATABASE_URL" -c "SELECT version FROM schema_migrations ORDER BY version;"
+```
+
+**Run as `corujai_app`, not as `postgres`.** Railway hands the app a plain role, and a
+superuser bypasses every permission check — connecting as `postgres` in dev hides
+`permission denied` errors until deploy.
+
+`ALTER DATABASE ... OWNER TO` is the whole grant story on PostgreSQL 15+ (Arch ships 18):
+the `public` schema is owned by `pg_database_owner`, which resolves to whoever owns the
+database, so the role gets `CREATE TABLE` with no explicit `GRANT`. Older tutorials tell you
+to `GRANT ALL ON SCHEMA public` — that was needed pre-15 and is redundant here. No migration
+uses an extension or any other superuser-only operation.
+
 ### Tests
 
 There is no unittest/pytest wiring; each module ships a standalone runnable script under
