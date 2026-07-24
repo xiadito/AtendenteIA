@@ -60,8 +60,8 @@ from database.db import get_connection  # noqa: E402
 # touch a real lead or the scheduling suite's 5521000... senders.
 SENDER_PREFIX = "5522000"
 
-MIGRATION_STATE = "006_add_conversation_state_to_sessions"
-MIGRATION_CONFIGS = "007_create_ai_configs"
+MIGRATION_STATE = "005_add_conversation_state_to_sessions"
+MIGRATION_CONFIGS = "006_create_ai_configs"
 
 DEFAULT_REPORT_DIR = SRC_DIR / "tests" / "outputs"
 
@@ -396,7 +396,7 @@ class AiActionSuite:
                 found = {row["version"] for row in cur.fetchall()}
         missing = {MIGRATION_STATE, MIGRATION_CONFIGS} - found
         expect(not missing, f"migrations não aplicadas: {sorted(missing)} (suba a app para rodar init_db)")
-        return "migrations 006 e 007 aplicadas"
+        return "migrations 005 e 006 aplicadas"
 
     # -- fixtures -----------------------------------------------------------
 
@@ -754,7 +754,7 @@ def main() -> None:
 
     report.section("Pré-requisitos")
     suite = AiActionSuite(report, keep=args.keep, skip_live=args.skip_live)
-    if not report.run("P1", "Migrations 006 e 007 aplicadas", suite.check_migrations):
+    if not report.run("P1", "Migrations 005 e 006 aplicadas", suite.check_migrations):
         print(console.red("\n Pré-requisitos falharam — a suíte não pode continuar."))
         report.summary()
         sys.exit(1)

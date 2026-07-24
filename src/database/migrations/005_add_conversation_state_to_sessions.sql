@@ -1,5 +1,5 @@
 -- ============================================================
--- Migration 006: Add discrete conversation state to sessions
+-- Migration 005: Add discrete conversation state to sessions
 --
 -- Owner of writes: bot/session.py::save_session(), driven by the action block
 --                  the AI returns each turn (parsed in bot/handlers.py).

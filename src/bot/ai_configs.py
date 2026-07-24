@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 # Returned when a tenant has no ai_configs row. The conversation must still work
 # (degrade, never crash), so the prompt builder gets safe, obviously-empty text
-# instead of a missing key. Seeding (migration 007) normally makes this unused.
+# instead of a missing key. Seeding (migration 006) normally makes this unused.
 _FALLBACK_CONFIG: dict[str, str] = {
     "tenant_id": DEFAULT_TENANT_ID,
     "academy_name": "a academia",

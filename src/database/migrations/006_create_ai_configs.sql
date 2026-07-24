@@ -1,5 +1,5 @@
 -- ============================================================
--- Migration 007: Create ai_configs, the per-tenant customizable prompt layer
+-- Migration 006: Create ai_configs, the per-tenant customizable prompt layer
 --
 -- Owner of writes: the gym owner, by hand via SQL for the pilot (no UI yet).
 -- Owner of reads:  bot/ai_configs.py::get_ai_config(), whose values
