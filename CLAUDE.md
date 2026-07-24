@@ -128,8 +128,8 @@ parses to update conversation state and execute actions. The flow in
 is capped at the last 10 turns (`max_history_turns = 10`), and stores the message **without**
 the action block (the state lives in columns, so the block would only waste tokens).
 
-The grocery-store `ORDER_CONFIRMED:` path is gone; `orders`/`save_order()` still exist but go
-orphan (see Known Issues).
+The grocery-store `ORDER_CONFIRMED:` path and the whole `orders` feature behind it are gone
+(see Session Storage).
 
 ### AI Service
 
@@ -145,25 +145,32 @@ longer imported): Module 3 rebuilds it every message from the protected layer + 
 
 ### Session Storage
 
-`bot/session.py` persists sessions and orders in **Postgres** via `database/db.py::get_connection()`
-(psycopg2 with `RealDictCursor`, so rows come back as dicts). Three tables are involved:
+`bot/session.py` persists sessions in **Postgres** via `database/db.py::get_connection()`
+(psycopg2 with `RealDictCursor`, so rows come back as dicts). Two tables are involved:
 
-- `sessions` — one row per `sender`. `history` is `jsonb`; the Module 3 **conversation state**
-  lives in discrete typed columns (`stage`, `lead_name`, `child_name`, `qualification`,
-  `is_paused`), not JSONB, so the funnel is explorable with plain SQL.
-- `orders` — one row per order, keyed by a UUID4 `id` generated in `save_order()`. Orphan since
-  Module 3 (see Known Issues) but still read by the dashboard.
+- `sessions` — one row per `sender`, created complete by migration 001. `history` is `jsonb`;
+  the Module 3 **conversation state** lives in discrete typed columns (`stage`, `lead_name`,
+  `child_name`, `qualification`, `is_paused`), not JSONB, so the funnel is explorable with
+  plain SQL. Indexed by `stage` (`idx_sessions_stage`).
 - `trial_bookings` — one row per trial-class booking (Module 2), with `child_name` for
-  `[BABY]`/`[CRIANCAS]` classes (Module 3 preliminary step).
+  `[BABY]`/`[CRIANCAS]` classes (Module 3 preliminary step), also created complete by
+  migration 004.
+
+Two more tables exist but are not touched by `session.py`: `owners` (migration 003, Google
+Calendar credentials) and `ai_configs` (migration 005, the customizable prompt layer). A fifth,
+`products` (migration 002), is grocery-store legacy kept alive only because `sync_agent/` reads it.
+
+**The `orders` feature was removed entirely.** It went orphan at Module 3 (the AI closes
+bookings, not orders), and was then deleted end to end: the `orders` table, `save_order()`,
+`get_all_orders()`, `update_order_status()`, `valid_order_statuses`, `database/seed.py`, and the
+`/dashboard/index` + `/dashboard/update-order-status` routes with their template and stylesheet.
+`clear_session()` now deletes only the session row. Nothing in the codebase references `orders`.
 
 **Trap:** `get_session()`, `save_session()` and `get_all_sessions()` must read/write the *same*
 column set (they share `_STATE_COLUMNS`/`_row_to_session`) — a column written by one but not
 read by another makes state silently vanish next turn.
 
-`get_all_orders()` normalizes the DB column `current_status` to the key `status` and
-`client_address` to `address` — templates and the dashboard route use the normalized names.
-
-`valid_order_statuses`, `valid_stages` and `valid_qualifications` (module-level `set`s in
+`valid_stages` and `valid_qualifications` (module-level `set`s in
 `session.py`) are the single source of truth for their allowed values — validated in Python,
 with **no DB `CHECK`**, so widening an enum is a code change with no migration (same pattern as
 `bookings.valid_booking_statuses`).
@@ -173,8 +180,41 @@ with **no DB `CHECK`**, so widening an enum is a code change with no migration (
 `database/db.py::init_db()` is a small hand-rolled migration runner, called once from
 `create_app()`. It creates a `schema_migrations` table, then applies every `.sql` file in
 `database/migrations/` in filename order, recording each version so it never re-runs.
-There is no ORM — SQLAlchemy/Alembic are deliberately *not* dependencies. To change the
-schema, add a new numbered `.sql` file; never edit an applied one.
+There is no ORM — SQLAlchemy/Alembic are deliberately *not* dependencies.
+
+The sequence is **contiguous, 001–005**, and each table is created complete by a single
+migration — there are no `ALTER TABLE` follow-ups:
+
+| Version | Creates |
+|---|---|
+| `001_create_sessions.sql` | `sessions` (incl. all conversation-state columns) + `idx_sessions_stage` |
+| `002_create_products.sql` | `products` + indexes on `external_id`, `is_active`, `category` |
+| `003_create_owners.sql` | `owners` (Google Calendar credentials) + seeds the `default` tenant row |
+| `004_create_trial_bookings.sql` | `trial_bookings` (incl. `child_name`) + indexes on `sender`, `slot_start`, `calendar_event_id` |
+| `005_create_ai_configs.sql` | `ai_configs` + seeds the `default` tenant config |
+
+**The "never edit an applied migration" rule is currently suspended, on purpose.** While the
+project is pre-deploy the only database is the local `corujai`, recreated from empty at will,
+so there is no applied history to protect. Late schema decisions were therefore *folded back
+into the base migration* rather than appended as `ALTER`s — `child_name` into 004 (`c44494e`),
+the conversation-state columns into 001 (`7ef92cd`) — and the leftover numbers were closed up
+(`8e4ea54`). The payoff is that each migration reads as one coherent table definition with its
+whole rationale in the header, instead of a design spread over three files.
+
+The cost, in two parts:
+
+- **Editing a migration in place is invisible to `init_db()`** — it only checks whether a
+  version string is in `schema_migrations`, never whether the file changed. A database that
+  applied the old 001 keeps the old `sessions` forever. After any such edit the local database
+  must be dropped and recreated, not migrated.
+- **Renaming one silently re-runs it**, because `version` is the filename stem
+  (`sql_file.stem`). That is only safe because every migration here is idempotent
+  (`CREATE TABLE/INDEX IF NOT EXISTS`, `INSERT ... ON CONFLICT DO NOTHING`) — treat that as a
+  hard requirement, not a style. A rename also strands the old version string in
+  `schema_migrations`; delete it by hand.
+
+Once the first real deploy exists this reverts to the normal rule: add a new numbered `.sql`
+file; never edit an applied one.
 
 ### Two-Layer System Prompt (Module 3)
 
@@ -198,18 +238,20 @@ integration exceptions into an empty list so a disconnected calendar never break
 
 ### Dashboard
 
-A password-protected web dashboard is available at `/dashboard/index`. Routes are defined in `webhook/routes.py` under `dashboard_bp`:
+A password-protected web dashboard is available at `/dashboard/menu`. Routes are defined in `webhook/routes.py` under `dashboard_bp`:
 
 | Route | Method | Description |
 |---|---|---|
 | `/dashboard/login` | GET/POST | Password login form |
 | `/dashboard/logout` | GET | Clears session, redirects to login |
-| `/dashboard/menu` | GET | Post-login navigation hub (orders, integrations, future features) |
-| `/dashboard/index` | GET | Order list (requires auth); accepts `?status=` query param to filter by status |
-| `/dashboard/update-order-status` | POST | Advance an order's status; expects `order_id` and `status` form fields |
+| `/dashboard/menu` | GET | Post-login navigation hub (integrations, future features) |
 
 `GET /` (in `webhook_bp`) simply redirects to `dashboard.menu` — there is no separate landing
 page. Login redirects to the menu too, so the menu is the single entry point to the UI.
+
+**The dashboard currently has no data screen.** Its only one was the order list, removed with
+the `orders` feature; the menu links to the Google Calendar integration page and nothing else.
+A `trial_bookings` screen (so the owner can confirm trial classes) belongs to a later module.
 
 ### Google Calendar Integration
 
@@ -245,15 +287,15 @@ src/static/
 │   ├── theme.css         ← CSS variables, dark mode override, .theme-toggle button
 │   ├── login.css         ← login card + form styles
 │   ├── menu.css          ← post-login navigation hub
-│   ├── dashboard.css     ← table, badges, summary bar, status filter
 │   └── integrations.css  ← Google Calendar connection status page
 └── js/
     └── theme.js          ← shared dark/light theme toggle (all pages)
 ```
 
 Every stylesheet is paired with exactly one template in `src/templates/`
-(`login.html`, `menu.html`, `dashboard.html`, `integrations_google.html`), all of which are
-rendered by a route. Deleting a template means deleting its stylesheet too.
+(`login.html`, `menu.html`, `integrations_google.html`), all of which are
+rendered by a route. Deleting a template means deleting its stylesheet too — that is why
+removing the order list took `dashboard.html` and `dashboard.css` with it.
 
 Theme preference is persisted in `localStorage` and falls back to the OS `prefers-color-scheme` setting.
 
@@ -272,11 +314,11 @@ Defined in `src/.env` and loaded via `config.py`:
 | `AI_BASE_URL` | LLM endpoint — Anthropic-compatible (e.g. `https://api.anthropic.com/v1/`) |
 | `AI_MODEL` | Model name (e.g. `claude-haiku-4-5-20251001`) |
 | `AI_API_KEY` | API key for the LLM provider |
-| `DATABASE_URL` | Postgres URL — required; `init_db()` and every session/order query use it |
+| `DATABASE_URL` | Postgres URL — required; `init_db()` and every session/booking query use it. Connect as `corujai_app`, not `postgres` (see Local database setup) |
 | `GOOGLE_CLIENT_ID` | Google Cloud OAuth client ID |
 | `GOOGLE_CLIENT_SECRET` | Google Cloud OAuth client secret |
 | `GOOGLE_REDIRECT_URI` | Must match the redirect URI registered in Google Cloud Console exactly |
-| `FLASK_ENV` | Defaults to `development`; gates `seed_fake_orders()` |
+| `FLASK_ENV` | Defaults to `development`; not currently gating anything since `seed.py` was removed |
 | `DASHBOARD_USER` | Read by `config.py` but **never used** — login checks the password only |
 | `WHATSAPP_TOKEN` | Meta Cloud API token (currently unused) |
 | `WHATSAPP_PHONE_NUMBER_ID` | Meta Cloud API phone ID (currently unused) |
@@ -298,18 +340,20 @@ Defined in `src/.env` and loaded via `config.py`:
 
 ## Known Issues / TODOs
 
-- `database/seed.py::seed_fake_orders()` is imported in `app.py` but its call is commented out. It is now safe to re-enable (it guards on `Config.FLASK_ENV == "development"` and skips when orders already exist), but it writes real rows to Postgres — keep it commented in production.
-- **The `orders` code is orphan since Module 3** — `save_order()`, `update_order_status()`,
-  `valid_order_statuses`, the `orders` table and the dashboard that reads it no longer receive
-  new data (the AI closes bookings, not orders). It is left **working on purpose**: the
-  dashboard must keep opening without error. Its fate is a later module's call — don't remove it.
+- **The dashboard has no data screen** since the `orders` removal — only login, logout and a
+  menu pointing at the Google Calendar page. The screen that replaces it (a `trial_bookings`
+  list so the owner can confirm trial classes) belongs to Module 4/5.
+- `products` (migration 002) is grocery-store legacy with no reader inside `src/` — only
+  `sync_agent/` uses it. It survives the rebrand for that reason alone.
+- `sync_agent/schedule/README.md` still documents the pre-rebrand names: the `mercadinho_dev`
+  database (line 35) and the `MercadinhoSyncAgent` Windows service (lines 86, 90). Out of scope
+  for the rebrand commits — `sync_agent/` is a separate program with its own requirements.
 - **The 1h timeout is lazy** (evaluated only when a message arrives): a lead who never writes
   again keeps stale state in `sessions` forever. Accepted for the build phase — there is no
   dashboard funnel to distort yet.
-- Dead code still present: `bot/ai_service.py::update_order_status()` (a body-less stub that
-  shadows the real one in `session.py`) and the commented-out Meta `receive()` route in
-  `webhook/routes.py`. (`bot/session.py::clear_session()` is now used — the Module 3 test CLI's
-  `reset` command and manual un-pause both call it.)
+- Dead code still present: the commented-out Meta `receive()` route in `webhook/routes.py`.
+  (`bot/session.py::clear_session()` is live — its one call site is the Module 3 test CLI's
+  `reset` command, `src/tests/test_ai_action/test_ai_action.py`.)
 - `VERIFY_TOKEN` and `GET /webhook` exist only for the Meta Cloud API, which is not in use.
 - `sync_agent/schedule/sync_agent.log` is committed to git — a runtime log file that shouldn't be tracked.
 - `integrations/routes.py::google_callback` is guarded by `@_require_auth`. If the dashboard session expires between `/connect` and `/callback` (two separate HTTP requests), Google's `code` is lost on the redirect to login. Rare in practice, but real.
