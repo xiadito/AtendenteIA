@@ -13,7 +13,6 @@ No code changes are required between dev and prod.
 import logging
 from config import Config
 from openai import OpenAI
-from bot.ai_context import system_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -36,38 +35,39 @@ def _get_client() -> OpenAI:
     
     return client
 
-def get_ai_response(conversation_history: list[dict[str, str]]) -> str:
+def get_ai_response(conversation_history: list[dict[str, str]], system_prompt: str) -> str:
     """
     Sends the conversation history to the LLM and returns the attendant reply.
 
+    The system prompt is passed in per turn (not imported) because Module 3
+    rebuilds it every message: it mixes the protected layer with per-tenant
+    config, the currently available slots and the lead's active bookings.
+
     Args:
-        conversation_history (list[dict[str, str]]): 
-        List of messsages in the conversation.
-        the keys are "role" and "content".
-        "role" is either "user or "attendant".
+        conversation_history (list[dict[str, str]]):
+            List of messages in the conversation. The keys are "role" and
+            "content"; "role" is either "user" or "assistant".
+        system_prompt (str): The fully assembled system prompt for this turn,
+            built by bot.ai_context.build_system_prompt().
     Returns:
-        str: The attendant reply as a string.
+        str: The attendant reply as a string. May contain a <corujai_action>
+        block, which the handler parses and strips before sending to the lead.
     """
-    
+
     model: str = Config.AI_MODEL
     client: OpenAI = _get_client()
-    
-    # def exemplo_visual()
-        # messages = list[dict[str, str]] = [
-        #     {},
-        #     {},
-        #     {},
-        #     *conversation_history = [{}, {}, {},] -> {}, {}, {},
-        
+
     messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}, *conversation_history]
     logger.info("Calling AI model '%s' with %d message(s).", model, len(messages))
-    
+
     try:
         response = client.chat.completions.create(
             model = model,
             messages = messages,
             temperature = 0.7,
-            max_tokens = 512,
+            # Headroom for the Portuguese reply AND the appended action block;
+            # a too-small limit truncates the block and breaks the parse.
+            max_tokens = 900,
         )
     except Exception as exc:
         logger.error("AI API call failed: %s", exc)
