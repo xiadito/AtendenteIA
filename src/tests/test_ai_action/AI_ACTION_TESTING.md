@@ -21,13 +21,14 @@ Necessário só para os testes de **agendamento real** (adultos, infantil,
 `missing_child_name`). Conecte em `/integrations/google`. Sem isso, esses testes
 são **pulados** (SKIP), e o restante roda normalmente.
 
-### Migrations 005, 006 e 007 aplicadas
+### Migrations 004, 006 e 007 aplicadas
 As migrations rodam sozinhas quando a app sobe (`init_db()` em `create_app()`).
-Confira:
+A coluna `child_name` em `trial_bookings` faz parte da migration 004 (num banco
+novo do rebrand, a tabela já nasce com ela). Confira:
 
 ```sql
 SELECT version FROM schema_migrations ORDER BY version;
--- deve incluir 005_add_child_name_to_trial_bookings,
+-- deve incluir 004_create_trial_bookings (já com child_name),
 -- 006_add_conversation_state_to_sessions e 007_create_ai_configs
 ```
 
@@ -62,7 +63,7 @@ WHERE tenant_id = 'default';
 # na raiz do repositório
 source venv/bin/activate
 
-# sobe a app uma vez para aplicar as migrations 005–007
+# sobe a app uma vez para aplicar as migrations 006–007 (004 já traz child_name)
 cd src && python app.py        # Ctrl-C depois que logar "Migration 007 ... applied"
 ```
 

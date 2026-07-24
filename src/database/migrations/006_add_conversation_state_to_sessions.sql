@@ -17,7 +17,7 @@
 -- same single-source-of-truth pattern as bookings.valid_booking_statuses, so
 -- widening an enum later is a code change with no migration.
 --
--- child_name mirrors trial_bookings.child_name (migration 005): NULL = not
+-- child_name mirrors trial_bookings.child_name (migration 004): NULL = not
 -- applicable, distinct from an empty string. is_paused backs the handoff pause
 -- (Module 3) and MUST survive an app restart, which is why it is a persisted
 -- column and not in-memory state.

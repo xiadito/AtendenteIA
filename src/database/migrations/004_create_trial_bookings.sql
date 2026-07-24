@@ -21,6 +21,12 @@
 -- UNIQUE(calendar_event_id, sender) instead stops the same lead from
 -- reserving the same slot twice, without limiting how many different leads
 -- can book it.
+--
+-- child_name is set only for [BABY]/[CRIANCAS] classes, which are attended by a
+-- minor: lead_name/sender is the responsible adult who chats on WhatsApp, and
+-- child_name is the child who takes the class. It is NULLABLE on purpose: NULL
+-- means "not applicable" (an adult booking), distinct from an empty string
+-- standing for "a child class whose name wasn't collected".
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS trial_bookings (
@@ -28,6 +34,7 @@ CREATE TABLE IF NOT EXISTS trial_bookings (
     tenant_id VARCHAR(64) NOT NULL DEFAULT 'default',
     sender VARCHAR(20) NOT NULL,
     lead_name VARCHAR(255) NOT NULL,
+    child_name VARCHAR(255) NULL,
     calendar_event_id VARCHAR(255) NOT NULL,
     class_type VARCHAR(20) NOT NULL,
     slot_start TIMESTAMPTZ NOT NULL,
