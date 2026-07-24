@@ -283,7 +283,6 @@ Defined in `src/.env` and loaded via `config.py`:
   `webhook/routes.py`. (`bot/session.py::clear_session()` is now used — the Module 3 test CLI's
   `reset` command and manual un-pause both call it.)
 - `VERIFY_TOKEN` and `GET /webhook` exist only for the Meta Cloud API, which is not in use.
-- `config.py` and `.env.example` still default `DATABASE_URL` to a `mercadinho_dev` database name — a naming leftover from the pre-pivot product, harmless but stale.
 - `sync_agent/schedule/sync_agent.log` is committed to git — a runtime log file that shouldn't be tracked.
 - `integrations/routes.py::google_callback` is guarded by `@_require_auth`. If the dashboard session expires between `/connect` and `/callback` (two separate HTTP requests), Google's `code` is lost on the redirect to login. Rare in practice, but real.
 
