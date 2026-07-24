@@ -69,6 +69,54 @@ Each suite prints a PASS/FAIL report and exits non-zero on failure; SKIPs don't 
 Each module also has a manual CLI (`test_scheduling.py`, `test_ai_action.py`) and a testing
 roteiro (`SCHEDULING_ENGINE_TESTING.md`, `AI_ACTION_TESTING.md`).
 
+### Inspecting the database with DBeaver
+
+The suites assert; DBeaver is for **seeing** what a conversation actually wrote. It pairs with
+the manual CLIs — send a turn through `test_ai_action.py`, then read the row back — which is the
+only way to check that the state columns hold what the `<corujai_action>` block claimed.
+
+Connection: `Database → New Database Connection → PostgreSQL`, host `localhost`, port `5432`,
+database `corujai`, user `corujai_app` + its password. DBeaver is Java and speaks **JDBC**, so
+its URL is `jdbc:postgresql://localhost:5432/corujai` — no credentials embedded, unlike the
+libpq `DATABASE_URL` in `src/.env`. On first connect it offers to download the driver; accept.
+
+Three settings that save real time:
+
+- **`Navigator View → Simple`** (right-click the connection) collapses
+  `Databases → corujai → Schemas → public → Tables` down to `corujai → Tables`.
+- **Auto-commit on.** In `Manual Commit` a `CREATE`/`UPDATE` sits in an open transaction, and
+  the metadata tree — which uses a *separate* connection — cannot see it.
+- **`F5` refreshes the selected node only.** After `python app.py` applies a migration, select
+  the `Tables` folder and refresh; pressing `F5` on a single table won't reveal a new one.
+  If the tree stays stale, right-click the connection → `Invalidate/Reconnect`.
+
+Queries worth keeping in a saved SQL editor:
+
+```sql
+-- Migration history: 001-005, all five present
+SELECT version FROM schema_migrations ORDER BY version;
+
+-- Funnel state per lead (why the state lives in columns, not JSONB)
+SELECT sender, stage, lead_name, child_name, qualification, is_paused, updated_at
+FROM sessions ORDER BY updated_at DESC;
+
+-- Bookings the AI closed, newest first
+SELECT sender, lead_name, child_name, class_type, slot_start, status
+FROM trial_bookings ORDER BY created_at DESC;
+
+-- Un-pause a lead parked by a handoff (nothing does this automatically until Module 4)
+UPDATE sessions SET is_paused = FALSE WHERE sender = 'whatsapp:+55...';
+
+-- Reset one lead to a fresh greeting without touching the others
+DELETE FROM sessions WHERE sender = 'whatsapp:+55...';
+```
+
+**Don't `TRUNCATE owners`** when clearing test data — it holds the Google Calendar tokens, and
+wiping it means redoing the whole OAuth flow. `sessions` and `trial_bookings` are safe to empty.
+
+`history` is `jsonb`; double-clicking the cell opens DBeaver's JSON viewer, which is the
+readable way to confirm the 10-turn cap and that the stored text is **block-stripped**.
+
 ### Dependencies
 
 `requirements.txt` is a **curated** pinned list: the 10 packages the code actually imports
