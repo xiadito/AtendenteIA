@@ -60,8 +60,13 @@ from database.db import get_connection  # noqa: E402
 # touch a real lead or the scheduling suite's 5521000... senders.
 SENDER_PREFIX = "5522000"
 
-MIGRATION_STATE = "005_add_conversation_state_to_sessions"
-MIGRATION_CONFIGS = "006_create_ai_configs"
+MIGRATION_CONFIGS = "005_create_ai_configs"
+
+# The conversation-state columns are created by the base migration (001), so
+# checking schema_migrations for them proves nothing — any database has 001
+# applied, including one created before those columns existed. The prereq
+# therefore checks the columns themselves, in information_schema.
+STATE_COLUMNS = {"stage", "lead_name", "child_name", "qualification", "is_paused"}
 
 DEFAULT_REPORT_DIR = SRC_DIR / "tests" / "outputs"
 
@@ -386,17 +391,32 @@ class AiActionSuite:
 
     # -- prerequisites ------------------------------------------------------
 
-    def check_migrations(self) -> str:
+    def check_schema(self) -> str:
+        """Check the Module 3 schema is in place.
+
+        Verifies the ai_configs migration ran AND that the conversation-state
+        columns actually exist — the latter is checked in information_schema
+        rather than schema_migrations, because those columns come from the base
+        migration (001), which every database has applied regardless.
+        """
         with get_connection() as conn:
             with conn.cursor() as cur:
+                cur.execute("SELECT version FROM schema_migrations WHERE version = %s", (MIGRATION_CONFIGS,))
+                configs_applied = cur.fetchone() is not None
                 cur.execute(
-                    "SELECT version FROM schema_migrations WHERE version IN (%s, %s)",
-                    (MIGRATION_STATE, MIGRATION_CONFIGS),
+                    """
+                    SELECT column_name FROM information_schema.columns
+                    WHERE table_name = 'sessions' AND column_name = ANY(%s)
+                    """,
+                    (sorted(STATE_COLUMNS),),
                 )
-                found = {row["version"] for row in cur.fetchall()}
-        missing = {MIGRATION_STATE, MIGRATION_CONFIGS} - found
-        expect(not missing, f"migrations não aplicadas: {sorted(missing)} (suba a app para rodar init_db)")
-        return "migrations 005 e 006 aplicadas"
+                present = {row["column_name"] for row in cur.fetchall()}
+
+        expect(configs_applied,
+               f"migration {MIGRATION_CONFIGS} não aplicada (suba a app para rodar init_db)")
+        missing = STATE_COLUMNS - present
+        expect(not missing, f"colunas de estado ausentes em sessions: {sorted(missing)}")
+        return "ai_configs aplicada e colunas de estado presentes em sessions"
 
     # -- fixtures -----------------------------------------------------------
 
@@ -754,7 +774,7 @@ def main() -> None:
 
     report.section("Pré-requisitos")
     suite = AiActionSuite(report, keep=args.keep, skip_live=args.skip_live)
-    if not report.run("P1", "Migrations 005 e 006 aplicadas", suite.check_migrations):
+    if not report.run("P1", "Schema do Módulo 3 aplicado", suite.check_schema):
         print(console.red("\n Pré-requisitos falharam — a suíte não pode continuar."))
         report.summary()
         sys.exit(1)

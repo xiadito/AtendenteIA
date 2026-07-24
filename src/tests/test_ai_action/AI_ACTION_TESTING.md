@@ -21,15 +21,20 @@ Necessário só para os testes de **agendamento real** (adultos, infantil,
 `missing_child_name`). Conecte em `/integrations/google`. Sem isso, esses testes
 são **pulados** (SKIP), e o restante roda normalmente.
 
-### Migrations 004, 005 e 006 aplicadas
+### Migrations 001–005 aplicadas
 As migrations rodam sozinhas quando a app sobe (`init_db()` em `create_app()`).
-A coluna `child_name` em `trial_bookings` faz parte da migration 004 (num banco
-novo, a tabela já nasce com ela). Confira:
+Num banco novo, as tabelas já nascem completas: o estado da conversa faz parte do
+`CREATE TABLE sessions` (migration 001) e o `child_name` faz parte de
+`trial_bookings` (migration 004). Confira:
 
 ```sql
 SELECT version FROM schema_migrations ORDER BY version;
--- deve incluir 004_create_trial_bookings (já com child_name),
--- 005_add_conversation_state_to_sessions e 006_create_ai_configs
+-- deve ir de 001_create_sessions_and_orders até 005_create_ai_configs
+
+-- e as colunas de estado precisam existir de fato:
+SELECT column_name FROM information_schema.columns
+WHERE table_name = 'sessions'
+  AND column_name IN ('stage','lead_name','child_name','qualification','is_paused');
 ```
 
 ### Vagas dos três tipos no calendário
@@ -42,7 +47,7 @@ python tests/test_scheduling/test_scheduling.py list
 ```
 
 ### `ai_configs` semeada
-A migration 006 já insere a linha do tenant `default` com placeholders. Personalize
+A migration 005 já insere a linha do tenant `default` com placeholders. Personalize
 por SQL (não há tela):
 
 ```sql
@@ -63,8 +68,8 @@ WHERE tenant_id = 'default';
 # na raiz do repositório
 source venv/bin/activate
 
-# sobe a app uma vez para aplicar as migrations 005–006 (004 já traz child_name)
-cd src && python app.py        # Ctrl-C depois que logar "Migration 006 ... applied"
+# sobe a app uma vez para aplicar as migrations (001–005)
+cd src && python app.py        # Ctrl-C depois que logar "Migration 005 ... applied"
 ```
 
 Todos os comandos abaixo rodam **de dentro de `src/`**.
@@ -332,7 +337,7 @@ descrição de qualquer evento real que uma reserva tenha alterado é restaurada
 
 | Sintoma | Causa provável | Como resolver |
 |---|---|---|
-| P1 falha ("migrations não aplicadas") | 005/006 não rodaram | Suba a app uma vez (`python app.py`) para o `init_db()` aplicar as migrations |
+| P1 falha (`ai_configs` não aplicada / colunas ausentes) | As migrations não rodaram, ou o banco é anterior ao Módulo 3 | Suba a app uma vez (`python app.py`) para o `init_db()` aplicar as migrations. Num banco antigo, as colunas de estado só existem se ele foi criado depois do fold na 001 |
 | Passos 1–3 sempre SKIP | Calendar desconectado ou sem vagas dos tipos | Conecte em `/integrations/google` e crie eventos `[ADULTOS]` e `[BABY]`/`[CRIANCAS]` |
 | A IA oferece um horário que não existe | O prompt sozinho não garante — mas o Python recusa o `book` | Confirme que o `event_id` recusado não estava na lista injetada (passo 15) |
 | Lead não recebe mais respostas | A sessão está pausada (handoff) | Despause (passo 8) — é o comportamento esperado após um handoff |
