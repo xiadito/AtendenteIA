@@ -12,9 +12,9 @@
 -- reservation ledger: how many leads are booked into each Calendar event,
 -- and who they are. There is no availability_slots table by design.
 --
--- id follows the same VARCHAR(36) uuid4-generated-in-Python pattern as
--- orders.id (see 001_create_sessions_and_orders.sql) rather than SERIAL,
--- for consistency with the rest of the app's booking/order records.
+-- id is a VARCHAR(36) holding a uuid4 generated in Python (see
+-- bookings.create_booking_with_lock) rather than a SERIAL, so a booking's id is
+-- known before the INSERT and never leaks how many bookings exist.
 --
 -- calendar_event_id has no UNIQUE constraint on its own: a single event can
 -- accept more than one booking once class capacity > 1 (baby/kids classes).
