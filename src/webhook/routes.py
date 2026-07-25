@@ -5,7 +5,6 @@ import logging
 import threading
 from whatsapp.whatsapp_service import send_message
 from bot.handlers import handle_text_message
-import bot.session as store
 
 
 # Configura o sistema de logs para mostrar data/hora, nível e mensagem
@@ -204,54 +203,5 @@ def logout():
 @dashboard_bp.route("/menu")
 @_require_auth
 def menu():
-    """Hub de navegação pós-login: pedidos, integrações e futuras features."""
+    """Hub de navegação pós-login: integrações e futuras features."""
     return render_template("menu.html")
-
-@dashboard_bp.route("/index")
-@_require_auth
-def index():
-    """ Main dashboard view - list of all orders from db"""
-    status_filter: str = request.args.get("status", "")
-    
-    all_orders: list[dict] = store.get_all_orders()
-    
-    if status_filter and status_filter in store.valid_order_statuses:
-        orders: list[dict] = [order for order in all_orders if order["status"] == status_filter]
-    else:
-        orders: list[dict] = all_orders
-    
-    
-    return render_template("dashboard.html", 
-                           orders=orders, 
-                           valid_statuses=store.valid_order_statuses, 
-                           active_filter=status_filter,
-                           )
-
-@dashboard_bp.route("/update-order-status", methods=["POST"])
-@_require_auth
-def update_status():
-    """Endpoint to update the status of an order from the dashboard form.
-    
-    Receives order_id and the target stattus, validades both and redirects back to  the dashboard.
-    """
-    
-    order_id: str = request.form.get("order_id", "")
-    new_status: str = request.form.get("status", "")
-    
-    if not order_id or not new_status:
-        logger.warning("update_status: missing order_id or status in POST request.")
-        return redirect(url_for("dashboard.index"))
-    
-    if new_status not in store.valid_order_statuses:
-        logger.warning("update_status: invalid status '%s' received.", new_status)
-        return redirect(url_for("dashboard.index"))
-    
-    success: bool = store.update_order_status(order_id, new_status)
-    
-    if not success:
-        logger.warning("update_status: order_id %s could not be updated.", order_id)
-        
-    return redirect(url_for("dashboard.index"))
-        
-    
-

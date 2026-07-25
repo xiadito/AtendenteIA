@@ -12,15 +12,21 @@
 -- reservation ledger: how many leads are booked into each Calendar event,
 -- and who they are. There is no availability_slots table by design.
 --
--- id follows the same VARCHAR(36) uuid4-generated-in-Python pattern as
--- orders.id (see 001_create_sessions_and_orders.sql) rather than SERIAL,
--- for consistency with the rest of the app's booking/order records.
+-- id is a VARCHAR(36) holding a uuid4 generated in Python (see
+-- bookings.create_booking_with_lock) rather than a SERIAL, so a booking's id is
+-- known before the INSERT and never leaks how many bookings exist.
 --
 -- calendar_event_id has no UNIQUE constraint on its own: a single event can
 -- accept more than one booking once class capacity > 1 (baby/kids classes).
 -- UNIQUE(calendar_event_id, sender) instead stops the same lead from
 -- reserving the same slot twice, without limiting how many different leads
 -- can book it.
+--
+-- child_name is set only for [BABY]/[CRIANCAS] classes, which are attended by a
+-- minor: lead_name/sender is the responsible adult who chats on WhatsApp, and
+-- child_name is the child who takes the class. It is NULLABLE on purpose: NULL
+-- means "not applicable" (an adult booking), distinct from an empty string
+-- standing for "a child class whose name wasn't collected".
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS trial_bookings (
@@ -28,6 +34,7 @@ CREATE TABLE IF NOT EXISTS trial_bookings (
     tenant_id VARCHAR(64) NOT NULL DEFAULT 'default',
     sender VARCHAR(20) NOT NULL,
     lead_name VARCHAR(255) NOT NULL,
+    child_name VARCHAR(255) NULL,
     calendar_event_id VARCHAR(255) NOT NULL,
     class_type VARCHAR(20) NOT NULL,
     slot_start TIMESTAMPTZ NOT NULL,

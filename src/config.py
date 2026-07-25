@@ -13,7 +13,9 @@ class Config:
     SECRET_KEY = os.environ.get("FLASK_SECRET_KEY", "dev-fallback-key")
     FLASK_ENV = os.environ.get("FLASK_ENV", "development")
     
-    DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:senha_faltando@localhost:5432/mercadinho_dev")
+    # Fallback mirrors the documented local setup (see CLAUDE.md "Local database
+    # setup"): the app role is corujai_app, never the postgres superuser.
+    DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://corujai_app:senha_faltando@localhost:5432/corujai")
     
     #twilio 
     TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
