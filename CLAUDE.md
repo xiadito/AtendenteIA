@@ -93,7 +93,7 @@ Three settings that save real time:
 Queries worth keeping in a saved SQL editor:
 
 ```sql
--- Migration history: 001-005, all five present
+-- Migration history: 001-006, all six present
 SELECT version FROM schema_migrations ORDER BY version;
 
 -- Funnel state per lead (why the state lives in columns, not JSONB)
@@ -104,7 +104,14 @@ FROM sessions ORDER BY updated_at DESC;
 SELECT sender, lead_name, child_name, class_type, slot_start, status
 FROM trial_bookings ORDER BY created_at DESC;
 
--- Un-pause a lead parked by a handoff (nothing does this automatically until Module 4)
+-- Set the owner's WhatsApp number (plain digits, no "whatsapp:+") — no UI yet
+UPDATE owners SET owner_phone = '5521999999999' WHERE tenant_id = 'default';
+
+-- Notifications queued for the owner, newest first
+SELECT event_type, lead_sender, booking_id, status, attempts, owner_response, created_at
+FROM owner_notifications ORDER BY created_at DESC;
+
+-- Un-pause a lead parked by a handoff (nothing does this automatically until a future feature)
 UPDATE sessions SET is_paused = FALSE WHERE sender = 'whatsapp:+55...';
 
 -- Reset one lead to a fresh greeting without touching the others
@@ -138,14 +145,24 @@ This is **Corujai**, a **WhatsApp chatbot focused on closing leads** for gyms (J
 ```
 Twilio POST /webhook
   → webhook/routes.py::receive_twilio()
+    → integrations/store.py::get_owner_by_phone()  (owner reply? route to receive_twilio_owner() instead)
     → bot/handlers.py::handle_text_message()
       → bot/session.py           (Postgres-backed session + conversation state)
       → bot/ai_configs.py        (per-tenant customizable prompt layer)
       → bot/ai_context.py        (cached slots + build_system_prompt)
       → bot/ai_service.py::get_ai_response(history, system_prompt)  (calls LLM)
       → bot/scheduling.py::book_slot()  (executes a booking, if the AI asked)
+      → bot/owner_notifications.py::enqueue_notification()  (after save_session, only logs on failure)
       → whatsapp/whatsapp_service.py::send_message()  (sends reply via Twilio) -> Future migration to Whatsapp API
 ```
+
+A closed booking or a handoff does not notify the owner synchronously: `handle_text_message()`
+only enqueues a row in `owner_notifications` (isolated in its own `try/except` that never blocks
+the reply to the lead). A separate Railway cron service, `jobs/drain_notifications.py`, drains
+pending rows on its own schedule and does the actual WhatsApp send, with retries — see
+Deployment. When the owner replies `1`/`2` to a notification, `receive_twilio_owner()` records
+the response via `owner_notifications.register_owner_response()` only; it does not update
+`trial_bookings` — closing out the booking based on that reply is still a future feature.
 
 ### AI-Driven Conversation (Module 3)
 
@@ -204,9 +221,11 @@ longer imported): Module 3 rebuilds it every message from the protected layer + 
   `[BABY]`/`[CRIANCAS]` classes (Module 3 preliminary step), also created complete by
   migration 004.
 
-Two more tables exist but are not touched by `session.py`: `owners` (migration 003, Google
-Calendar credentials) and `ai_configs` (migration 005, the customizable prompt layer). A fifth,
-`products` (migration 002), is grocery-store legacy kept alive only because `sync_agent/` reads it.
+Other tables exist but are not touched by `session.py`: `owners` (migration 003, Google
+Calendar credentials + `owner_phone`) and `ai_configs` (migration 005, the customizable prompt
+layer). `products` (migration 002) is grocery-store legacy kept alive only because `sync_agent/`
+reads it. `owner_notifications` (migration 006) is the owner-notification queue — see
+Request Flow and `src/tests/test_owner_notifications/OWNER_NOTIFICATIONS_TESTING.md`.
 
 **The `orders` feature was removed entirely.** It went orphan at Module 3 (the AI closes
 bookings, not orders), and was then deleted end to end: the `orders` table, `save_order()`,
@@ -230,24 +249,34 @@ with **no DB `CHECK`**, so widening an enum is a code change with no migration (
 `database/migrations/` in filename order, recording each version so it never re-runs.
 There is no ORM — SQLAlchemy/Alembic are deliberately *not* dependencies.
 
-The sequence is **contiguous, 001–005**, and each table is created complete by a single
+The sequence is **contiguous, 001–006**, and each table is created complete by a single
 migration — there are no `ALTER TABLE` follow-ups:
 
 | Version | Creates |
 |---|---|
 | `001_create_sessions.sql` | `sessions` (incl. all conversation-state columns) + `idx_sessions_stage` |
 | `002_create_products.sql` | `products` + indexes on `external_id`, `is_active`, `category` |
-| `003_create_owners.sql` | `owners` (Google Calendar credentials) + seeds the `default` tenant row |
+| `003_create_owners.sql` | `owners` (Google Calendar credentials + `owner_phone`) + seeds the `default` tenant row |
 | `004_create_trial_bookings.sql` | `trial_bookings` (incl. `child_name`) + indexes on `sender`, `slot_start`, `calendar_event_id` |
 | `005_create_ai_configs.sql` | `ai_configs` + seeds the `default` tenant config |
+| `006_create_owner_notifications.sql` | `owner_notifications` (the owner-notification queue) + two partial unique indexes (idempotency per `event_type`) + indexes on `status` and `owner_phone` |
 
 **The "never edit an applied migration" rule is currently suspended, on purpose.** While the
 project is pre-deploy the only database is the local `corujai`, recreated from empty at will,
 so there is no applied history to protect. Late schema decisions were therefore *folded back
 into the base migration* rather than appended as `ALTER`s — `child_name` into 004 (`c44494e`),
-the conversation-state columns into 001 (`7ef92cd`) — and the leftover numbers were closed up
-(`8e4ea54`). The payoff is that each migration reads as one coherent table definition with its
-whole rationale in the header, instead of a design spread over three files.
+the conversation-state columns into 001 (`7ef92cd`), `owner_phone` into 003 — and the leftover
+numbers were closed up (`8e4ea54`). The payoff is that each migration reads as one coherent
+table definition with its whole rationale in the header, instead of a design spread over
+several files.
+
+Editing 003 to add `owner_phone` means the local database (and, at the first real deploy, the
+Railway one too) must be dropped and recreated, not migrated — see the cost below. After
+recreating, set the pilot's number by hand (no UI exists yet):
+
+```sql
+UPDATE owners SET owner_phone = '5521999999999' WHERE tenant_id = 'default';
+```
 
 The cost, in two parts:
 
@@ -383,14 +412,29 @@ Defined in `src/.env` and loaded via `config.py`:
   `sessions`, and calls `book_slot()`/handoff mid-conversation. Two-layer prompt in
   `bot/ai_context.py` + per-tenant `ai_configs`. See
   `src/tests/test_ai_action/AI_ACTION_TESTING.md`.
-- **Modules 4 & 5 (future)** — owner notification / inbox / takeover and un-pause after a
-  handoff. Module 3 only *pauses* on handoff (`is_paused`); nothing un-pauses it yet.
+- **Owner notifications (done)** — A closed booking or a handoff enqueues a row in
+  `owner_notifications` (`bot/owner_notifications.py`); a separate Railway cron service
+  (`jobs/drain_notifications.py`) drains and delivers it via WhatsApp with retries. The owner's
+  `1`/`2` reply is routed by `webhook/routes.py::receive_twilio_owner()` and recorded via
+  `register_owner_response()`. See `src/tests/test_owner_notifications/OWNER_NOTIFICATIONS_TESTING.md`.
+- **Future** — an inbox/takeover screen in the dashboard, and un-pausing a session after a
+  handoff (today `is_paused` only ever gets set, never cleared) and actually closing out a
+  booking (`trial_bookings.status`) based on the owner's recorded response.
 
 ## Known Issues / TODOs
 
 - **The dashboard has no data screen** since the `orders` removal — only login, logout and a
   menu pointing at the Google Calendar page. The screen that replaces it (a `trial_bookings`
-  list so the owner can confirm trial classes) belongs to Module 4/5.
+  list so the owner can confirm trial classes) is still future work.
+- **Owner notifications are at-least-once, not exactly-once.** `jobs/drain_notifications.py`
+  retries a failed send every cron cycle (bounded by `MAX_ATTEMPTS = 5`) with no advisory lock —
+  Railway's cron already skips overlapping runs, so a second lock would be redundant, not
+  additive safety. A notification that hits the cap sits as `status = 'failed'` with no
+  automatic escalation yet.
+- **The owner's `1`/`2` reply is recorded, not acted on.** `register_owner_response()` only sets
+  `owner_notifications.owner_response`; nothing yet flips `trial_bookings.status` based on it,
+  and un-pausing a session after a handoff (`sessions.is_paused`) is also still unimplemented —
+  both are future work.
 - `products` (migration 002) is grocery-store legacy with no reader inside `src/` — only
   `sync_agent/` uses it. It survives the rebrand for that reason alone.
 - `sync_agent/schedule/README.md` still documents the pre-rebrand names: the `mercadinho_dev`
@@ -408,4 +452,17 @@ Defined in `src/.env` and loaded via `config.py`:
 
 ## Deployment
 
-Hosted on **Railway** via Nixpacks. Entry point: `gunicorn "app:create_app()"` (defined in both `src/Procfile` and `src/railway.json`). The working directory for Railway must be `src/` since all imports are relative to that folder (e.g., `from config import Config`).
+Hosted on **Railway** via Nixpacks, as **two services from the same repository** (not two
+repos) — both with Root Directory `src/`, since all imports are relative to that folder (e.g.,
+`from config import Config`):
+
+1. **Web** — entry point `gunicorn "app:create_app()"` (defined in both `src/Procfile` and
+   `src/railway.json`). Public domain, handles the Twilio webhook and the dashboard. Unchanged
+   by the owner-notifications work.
+2. **Cron** — start command `python -m jobs.drain_notifications`, Cron Schedule `* * * * *`, no
+   public domain. Railway starts the service on schedule, runs `jobs/drain_notifications.py::main()`
+   to completion, and shuts it down — overlapping runs are skipped natively, so the script
+   itself uses no advisory lock. It shares the same `DATABASE_URL` and Twilio env vars as the
+   web service. The script **must exit** (`sys.exit(...)`) without leaving a server, a thread,
+   or an open connection running, or a slow run could get killed mid-way by the next schedule
+   tick instead of being skipped cleanly.
