@@ -23,8 +23,10 @@ from datetime import datetime, timedelta, timezone
 
 import bot.ai_configs as ai_configs
 import bot.bookings as bookings
+import bot.owner_notifications as owner_notifications
 import bot.scheduling as scheduling
 import bot.session as session
+import integrations.store as store
 import whatsapp.whatsapp_service as whatsapp_service
 from bot.ai_context import ACTION_TAG, build_system_prompt, get_cached_slots
 from bot.ai_service import get_ai_response
@@ -99,12 +101,14 @@ def handle_text_message(sender: str, body: str) -> None:
     ai_message = _strip_action_block(raw_response)
 
     # 6. Apply state (lenient) and the action (strict). The final message may be
-    #    the AI's text or a handler-composed recovery message.
+    #    the AI's text or a handler-composed recovery message. notification_event
+    #    is None unless a booking or a handoff just happened.
     outgoing = ai_message
+    notification_event: dict | None = None
     if action_data is not None:
         _apply_lenient_state(state, action_data)
         try:
-            outgoing = _execute_action(state, action_data, slots, sender, ai_message)
+            outgoing, notification_event = _execute_action(state, action_data, slots, sender, ai_message)
         except Exception:
             # Errors here (e.g. a Calendar network blip inside book_slot's event
             # fetch) happen before anything is written, so no booking stands.
@@ -113,6 +117,7 @@ def handle_text_message(sender: str, body: str) -> None:
             logger.exception("Action execution failed for sender %s; sending a safe message.", sender)
             state["stage"] = "proposal"
             outgoing = "Tive um probleminha pra processar isso agora. Pode tentar de novo? 🙏"
+            notification_event = None
 
     if not outgoing.strip():
         outgoing = "Desculpe, pode repetir, por favor? 🙂"
@@ -123,6 +128,26 @@ def handle_text_message(sender: str, body: str) -> None:
     _add_to_history(history, "assistant", outgoing)
     state["history"] = _trim_history(history)
     session.save_session(sender, state)
+
+    # 7b. Enqueue an owner notification, if this turn closed a booking or
+    #     triggered a handoff. Isolated on purpose: this runs after the
+    #     session is already saved, in its own try/except that only logs.
+    #     A failure here must never stop the reply from reaching the lead.
+    if notification_event is not None:
+        try:
+            owner = store.get_owner_for_notification()
+            if owner is None or not owner.get("owner_phone"):
+                logger.warning("Owner has no owner_phone configured; skipping notification for %s.", sender)
+            else:
+                owner_notifications.enqueue_notification(
+                    owner_id=owner["id"],
+                    owner_phone=owner["owner_phone"],
+                    event_type=notification_event["event_type"],
+                    lead_sender=sender,
+                    booking_id=notification_event.get("booking_id"),
+                )
+        except Exception:
+            logger.exception("Failed to enqueue owner notification for %s; message will still be sent.", sender)
 
     # 8. Send.
     whatsapp_service.send_message(sender, outgoing)
@@ -283,7 +308,9 @@ def _coerce_stage(data: dict, current: str) -> str:
     return current
 
 
-def _execute_action(state: dict, data: dict, slots: list[dict], sender: str, ai_message: str) -> str:
+def _execute_action(
+    state: dict, data: dict, slots: list[dict], sender: str, ai_message: str
+) -> tuple[str, dict | None]:
     """Execute the strict action and set the final stage. Returns the outgoing text.
 
     Args:
@@ -294,8 +321,11 @@ def _execute_action(state: dict, data: dict, slots: list[dict], sender: str, ai_
         ai_message (str): The AI's lead-facing text (block already stripped).
 
     Returns:
-        str: The message to send — the AI's text, or a handler-composed recovery
-        message when the action could not complete as the model assumed.
+        tuple[str, dict | None]: The message to send — the AI's text, or a
+        handler-composed recovery message when the action could not complete
+        as the model assumed — and a notification_event ({"event_type": ...,
+        "booking_id": ...} or {"event_type": "handoff"}) when this turn
+        closed a booking or triggered a handoff, else None.
     """
     action = data.get("action")
     if action not in valid_actions:
@@ -306,17 +336,19 @@ def _execute_action(state: dict, data: dict, slots: list[dict], sender: str, ai_
         state["is_paused"] = True
         state["stage"] = "handoff_requested"
         logger.info("Handoff requested by %s; session paused.", sender)
-        return ai_message
+        return ai_message, {"event_type": "handoff"}
 
     if action == "book":
         return _execute_booking(state, data, slots, sender, ai_message)
 
     # action == "none": pure registry update.
     state["stage"] = _coerce_stage(data, state.get("stage", "greeting"))
-    return ai_message
+    return ai_message, None
 
 
-def _execute_booking(state: dict, data: dict, slots: list[dict], sender: str, ai_message: str) -> str:
+def _execute_booking(
+    state: dict, data: dict, slots: list[dict], sender: str, ai_message: str
+) -> tuple[str, dict | None]:
     """Validate and perform a booking, returning the message to send.
 
     event_id is validated against the injected slots in Python: the AI never
@@ -331,7 +363,9 @@ def _execute_booking(state: dict, data: dict, slots: list[dict], sender: str, ai
         ai_message (str): The AI's lead-facing text.
 
     Returns:
-        str: The message to send.
+        tuple[str, dict | None]: The message to send, and a notification_event
+        ({"event_type": "booking", "booking_id": ...}) only when book_slot
+        actually created a new booking, else None.
     """
     valid_event_ids = {slot["event_id"] for slot in slots}
     event_id = data.get("event_id")
@@ -339,12 +373,12 @@ def _execute_booking(state: dict, data: dict, slots: list[dict], sender: str, ai
     if not event_id or event_id not in valid_event_ids:
         logger.warning("Booking refused for %s: event_id %r is not in the injected slots.", sender, event_id)
         state["stage"] = "proposal"
-        return _reoffer_message(slots)
+        return _reoffer_message(slots), None
 
     lead_name = state.get("lead_name")
     if not lead_name:
         state["stage"] = "proposal"
-        return "Antes de eu confirmar, como você se chama? 🙂"
+        return "Antes de eu confirmar, como você se chama? 🙂", None
 
     lead = {"sender": sender, "name": lead_name, "child_name": state.get("child_name")}
     result = scheduling.book_slot(event_id, lead)
@@ -353,31 +387,32 @@ def _execute_booking(state: dict, data: dict, slots: list[dict], sender: str, ai
     if status == "created":
         state["stage"] = "booked"
         logger.info("Booking created for %s (synced=%s).", sender, result.get("calendar_synced"))
-        return ai_message
+        notification_event = {"event_type": "booking", "booking_id": result["booking_id"]}
+        return ai_message, notification_event
 
     if status == "missing_child_name":
         state["stage"] = "proposal"
-        return "Pra confirmar a aula experimental, me diz o nome da criança que vai participar? 🙂"
+        return "Pra confirmar a aula experimental, me diz o nome da criança que vai participar? 🙂", None
 
     if status == "full":
         state["stage"] = "proposal"
         options = _format_slot_options(slots, exclude_event_id=event_id)
         if options:
-            return f"Poxa, esse horário acabou de lotar! 😕 Mas ainda temos estes:\n{options}\nQual fica melhor pra você?"
-        return "Poxa, esse horário acabou de lotar. Vou verificar outros horários e já te retorno! 🙏"
+            return f"Poxa, esse horário acabou de lotar! 😕 Mas ainda temos estes:\n{options}\nQual fica melhor pra você?", None
+        return "Poxa, esse horário acabou de lotar. Vou verificar outros horários e já te retorno! 🙏", None
 
     if status == "duplicate":
         state["stage"] = "booked"
-        return "Você já tem esse horário reservado com a gente! 😄 Posso te ajudar com mais alguma coisa?"
+        return "Você já tem esse horário reservado com a gente! 😄 Posso te ajudar com mais alguma coisa?", None
 
     if status in {"integration_not_connected", "needs_reconnect"}:
         logger.warning("Booking for %s could not proceed: integration status %r.", sender, status)
         state["stage"] = "proposal"
-        return "Tivemos um probleminha técnico pra confirmar o horário agora. Já já retorno pra fechar com você, tá? 🙏"
+        return "Tivemos um probleminha técnico pra confirmar o horário agora. Já já retorno pra fechar com você, tá? 🙏", None
 
     logger.warning("Unexpected book_slot status %r for %s.", status, sender)
     state["stage"] = "proposal"
-    return _reoffer_message(slots)
+    return _reoffer_message(slots), None
 
 
 def _format_slot_options(slots: list[dict], exclude_event_id: str | None = None, limit: int = 6) -> str:
