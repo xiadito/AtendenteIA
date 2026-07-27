@@ -5,6 +5,8 @@ import logging
 import threading
 from whatsapp.whatsapp_service import send_message
 from bot.handlers import handle_text_message
+import bot.owner_notifications as owner_notifications
+import integrations.store as store
 
 
 # Configura o sistema de logs para mostrar data/hora, nível e mensagem
@@ -138,19 +140,47 @@ def receive_twilio() -> tuple:
         return jsonify({"error": "Payload inválido"}), 400
 
 
-    # Twilio sends "whatsapp:+5521999999999" we only need the numbers: "5521999999999" 
-    # cleans the sender number - .replace() replace one substring for another — here we remove "whatsapp:+" 
+    # Twilio sends "whatsapp:+5521999999999" we only need the numbers: "5521999999999"
+    # cleans the sender number - .replace() replace one substring for another — here we remove "whatsapp:+"
     clean_number = sender.replace("whatsapp:+", "")
     logger.info(f"Número limpo: {clean_number} | Mensagem: {body }")
 
-    # Delegate the handling of the message to the AI
-    # The routes.py don't know nothing about the menu or the products
-    if sender and body:
+    # A message from the gym owner's own number is a reply to a notification,
+    # not a lead starting/continuing a conversation — route it separately.
+    owner = store.get_owner_by_phone(clean_number)
+    if owner is not None:
+        receive_twilio_owner(clean_number, body)
+    else:
         handle_text_message(clean_number, body)
 
     # O Twilio espera status 200 para confirmar que você recebeu
     # Se não receber 200, ele tenta reenviar
     return jsonify({"status": "ok"}), 200
+
+
+def receive_twilio_owner(owner_phone: str, body: str) -> None:
+    """Handle a WhatsApp reply from the gym owner (never a lead).
+
+    Maps "1"/"2" to confirmed/cancelled and records the response. Never
+    calls update_booking_status() — actually closing out the booking based
+    on this reply is a future feature, not this one.
+
+    Args:
+        owner_phone (str): The owner's number, already in clean_number form.
+        body (str): The raw text the owner sent.
+    """
+    stripped = body.strip()
+    mapping = {"1": "confirmed", "2": "cancelled"}
+    response = mapping.get(stripped)
+
+    if response is None:
+        logger.info(f"Owner {owner_phone} sent an unrecognized reply: {body[:80]}")
+        send_message(owner_phone, "Não entendi. Responda 1 para confirmar ou 2 para cancelar.")
+        return
+
+    updated = owner_notifications.register_owner_response(owner_phone, response)
+    if not updated:
+        logger.warning(f"Owner {owner_phone} replied '{stripped}' but no open notification was found.")
 
 @webhook_bp.route("/", methods=["GET"])
 def initial_message():
