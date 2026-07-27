@@ -116,3 +116,49 @@ def clear_owner_credentials(tenant_id: str = DEFAULT_TENANT_ID) -> None:
             conn.commit()
 
     logger.info("Owner credentials cleared for tenant %s.", tenant_id)
+
+
+def get_owner_by_phone(owner_phone: str) -> dict | None:
+    """Find the owner whose owner_phone matches an incoming WhatsApp number.
+
+    Used by the webhook to decide whether an incoming message is the gym
+    owner replying to a notification, rather than a lead.
+
+    Args:
+        owner_phone (str): Plain-digit number, e.g. "5521999999999" (same
+            format as clean_number in webhook/routes.py).
+
+    Returns:
+        dict | None: {id, tenant_id, owner_phone} if this number belongs to
+        a registered owner, else None (an unknown number is a lead).
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, tenant_id, owner_phone FROM owners WHERE owner_phone = %s",
+                (owner_phone,),
+            )
+            row = cur.fetchone()
+
+    return dict(row) if row else None
+
+
+def get_owner_for_notification(tenant_id: str = DEFAULT_TENANT_ID) -> dict | None:
+    """Return the owner row a notification enqueue needs.
+
+    Args:
+        tenant_id (str): Tenant identifier. Fixed to DEFAULT_TENANT_ID for the pilot.
+
+    Returns:
+        dict | None: {id, tenant_id, owner_phone}, or None if no row exists.
+        owner_phone may be NULL — the caller must skip enqueueing, not crash.
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, tenant_id, owner_phone FROM owners WHERE tenant_id = %s",
+                (tenant_id,),
+            )
+            row = cur.fetchone()
+
+    return dict(row) if row else None
