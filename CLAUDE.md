@@ -63,11 +63,15 @@ python tests/test_scheduling/test_scheduling_suite.py
 
 # Module 3 — AI action layer (LLM stubbed for determinism; --skip-live avoids Calendar writes)
 python tests/test_ai_action/test_ai_action_suite.py --skip-live
+
+# Owner notifications — enqueue, cron drain, and owner-reply recording (fully deterministic)
+python tests/test_owner_notifications/test_owner_notifications_suite.py
 ```
 
 Each suite prints a PASS/FAIL report and exits non-zero on failure; SKIPs don't fail the run.
-Each module also has a manual CLI (`test_scheduling.py`, `test_ai_action.py`) and a testing
-roteiro (`SCHEDULING_ENGINE_TESTING.md`, `AI_ACTION_TESTING.md`).
+Each module also has a manual CLI (`test_scheduling.py`, `test_ai_action.py`,
+`test_owner_notifications.py`) and a testing roteiro (`SCHEDULING_ENGINE_TESTING.md`,
+`AI_ACTION_TESTING.md`, `OWNER_NOTIFICATIONS_TESTING.md`).
 
 ### Inspecting the database with DBeaver
 
