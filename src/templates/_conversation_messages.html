@@ -1,0 +1,32 @@
+{#
+  Parcial das mensagens de uma conversa. Renderizada de três formas:
+  - embutida em conversation.html na primeira carga (via {% include %});
+  - sozinha, pela rota dashboard.inbox_conversation_messages, a cada polling;
+  - como resposta do POST de resposta do operador, com `error` preenchido
+    quando o envio ao Twilio falhou.
+
+  Sem <html>/<head>: o estilo vem do conversation.css da página-mãe.
+#}
+{% if error %}
+    <div class="send-error">⚠️ {{ error }}</div>
+{% endif %}
+
+{% if not conversation %}
+    <p class="empty-state">Nenhuma mensagem nesta conversa ainda.</p>
+{% else %}
+    <ul class="message-list">
+        {% for message in conversation %}
+            <li class="message message-{{ message.author }}">
+                <div class="message-bubble">
+                    <span class="message-author">
+                        {% if message.author == 'lead' %}Lead
+                        {% elif message.author == 'operator' %}Você
+                        {% else %}IA{% endif %}
+                    </span>
+                    <p class="message-content">{{ message.content }}</p>
+                    <span class="message-time">{{ message.created_at.strftime('%d/%m %H:%M') }}</span>
+                </div>
+            </li>
+        {% endfor %}
+    </ul>
+{% endif %}

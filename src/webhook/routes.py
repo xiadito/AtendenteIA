@@ -371,15 +371,22 @@ def inbox_resume(sender: str):
 def _conversation_messages_response(sender: str, error: str | None = None):
     """Renderiza a parcial de mensagens, com um aviso opcional ao operador.
 
+    No sucesso devolve o header `HX-Trigger: reply-sent`, que é o que limpa o
+    campo de texto no front. O reset é preso ao sucesso de propósito: como a
+    falha de envio também volta 200 (ver inbox_reply), limpar sempre apagaria o
+    texto que o operador precisa justamente para reenviar.
+
     Args:
         sender (str): Número do lead.
         error (str | None): Mensagem de erro a exibir, em português.
 
     Returns:
-        tuple: (HTML, 200). Sempre 200 — ver a docstring de inbox_reply.
+        tuple: (HTML, 200, headers). Sempre 200 — ver a docstring de inbox_reply.
     """
-    return render_template(
+    html = render_template(
         "_conversation_messages.html",
         conversation=messages.get_conversation(sender),
         error=error,
-    ), 200
+    )
+    headers = {} if error else {"HX-Trigger": "reply-sent"}
+    return html, 200, headers
