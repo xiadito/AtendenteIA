@@ -4,13 +4,19 @@ handle_text_message() is the single entry point. Its step order matters:
 
 1. Pause check FIRST — a handoff-paused lead gets no reply and costs no tokens,
    and the pause is structurally exempt from the timeout (we never reach the
-   timeout code for a paused session).
+   timeout code for a paused session). It still STORES the lead's message: a
+   human holds the conversation in the dashboard inbox, and an operator who
+   cannot see what the lead said during the takeover is blind.
 2. 1h inactivity timeout — lazy, evaluated on message arrival from
    sessions.updated_at. No scheduler/cron/thread.
 3. Build the per-turn context (cached slots + the lead's active bookings) and
-   assemble the two-layer system prompt.
+   assemble the two-layer system prompt, plus the resume note when the operator
+   just handed this conversation back.
 4. Call the LLM, parse its <corujai_action> block defensively, apply state
    leniently and the action strictly, persist, and send the cleaned message.
+
+The conversation is NOT stored here: bot/messages.py owns it, and the LLM
+payload is a window over that table (see _to_llm_payload).
 
 Invariant: no parsing or action failure may stop the message from reaching the
 lead. Everything degrades; nothing crashes the send.
@@ -23,6 +29,7 @@ from datetime import datetime, timedelta, timezone
 
 import bot.ai_configs as ai_configs
 import bot.bookings as bookings
+import bot.messages as messages
 import bot.owner_notifications as owner_notifications
 import bot.scheduling as scheduling
 import bot.session as session
@@ -33,8 +40,11 @@ from bot.ai_service import get_ai_response
 
 logger = logging.getLogger(__name__)
 
-# Maximum conversation turns kept per session (1 turn = user + assistant = 2 items).
-max_history_turns: int = 10
+# How many messages of the conversation are replayed to the model each turn.
+# Counted in MESSAGES, not turns: 20 is the same window the old 10-turn history
+# cap gave, now taken from the messages table. An operator burst makes a turn
+# stop being exactly two messages, which is why the unit changed.
+MAX_PAYLOAD_MESSAGES: int = 20
 
 # A conversation with no activity for this long is closed and restarted from
 # scratch on the next message. Evaluated lazily (see handle_text_message):
@@ -59,15 +69,20 @@ def handle_text_message(sender: str, body: str) -> None:
         body (str): The text the lead sent.
     """
     text = body
-    logger.info("Handling text message from %s: %.80s", sender, text)
+    # Length, never the text: these messages are whole conversations and the
+    # repository is public (see bot/messages.py).
+    logger.info("Handling text message from %s (%d chars).", sender, len(text))
 
     state: dict = session.get_session(sender)
 
     # 1. Pause check FIRST. A handoff-paused lead is not answered, and this must
     #    come before any token cost and before the timeout (so the pause never
-    #    expires on its own).
+    #    expires on its own). The message is STILL recorded, unread: a human is
+    #    holding this conversation in the inbox, and everything the lead says
+    #    while the bot is silent is exactly what that operator needs to read.
     if state.get("is_paused"):
-        logger.info("Session for %s is paused (handoff); not replying.", sender)
+        messages.add_message(sender, "lead", text)
+        logger.info("Session for %s is paused (handoff); message stored, AI not called.", sender)
         return
 
     # 2. Lazy 1h inactivity timeout (only reached when not paused).
@@ -77,17 +92,28 @@ def handle_text_message(sender: str, body: str) -> None:
 
     # 3. Build this turn's context. Active bookings are injected ALWAYS (not just
     #    after a timeout) so the AI always knows what the lead already booked.
+    #    The resume note rides along on the single turn after the operator hands
+    #    the conversation back, and the marker is cleared right here so it is
+    #    delivered exactly once (persisted with the rest of the state in step 7).
     config = ai_configs.get_ai_config()
     slots = get_cached_slots()
     active_bookings = bookings.list_active_bookings_by_sender(sender)
-    system_prompt = build_system_prompt(config, slots, active_bookings)
+    resume_note: bool = bool(state.get("needs_resume_note"))
+    system_prompt = build_system_prompt(config, slots, active_bookings, resume_note=resume_note)
+    state["needs_resume_note"] = False
 
-    # 4. Append the user turn and call the AI.
-    history: list[dict[str, str]] = state["history"]
-    _add_to_history(history, "user", text)
+    # 4. Record the lead's message, then replay the recent window to the AI.
+    #    The window is bounded by conversation_started_at, so a conversation the
+    #    timeout restarted does not get the previous one replayed into it.
+    messages.add_message(sender, "lead", text)
+    recent = messages.get_recent_messages(
+        sender,
+        MAX_PAYLOAD_MESSAGES,
+        since=state.get("conversation_started_at"),
+    )
 
     try:
-        raw_response: str = get_ai_response(_trim_history(history), system_prompt)
+        raw_response: str = get_ai_response(_to_llm_payload(recent), system_prompt)
     except RuntimeError as exc:
         logger.error("AI service error for sender %s: %s", sender, exc)
         raw_response = (
@@ -122,12 +148,13 @@ def handle_text_message(sender: str, body: str) -> None:
     if not outgoing.strip():
         outgoing = "Desculpe, pode repetir, por favor? 🙂"
 
-    # 7. Persist. History stores the OUTGOING text (block already stripped): it
-    #    is what the lead actually saw and keeps the next turn coherent, while
-    #    keeping the (now larger) action block out of the token budget.
-    _add_to_history(history, "assistant", outgoing)
-    state["history"] = _trim_history(history)
+    # 7. Persist the state, then the message. The stored text is the OUTGOING one
+    #    (action block already stripped): it is what the lead actually saw, what
+    #    the operator will read in the inbox, and it keeps the action block out
+    #    of the next turn's token budget. Born read — an outgoing message is
+    #    nothing for the operator to catch up on.
     session.save_session(sender, state)
+    messages.add_message(sender, "ai", outgoing, is_read=True)
 
     # 7b. Enqueue an owner notification, if this turn closed a booking or
     #     triggered a handoff. Isolated on purpose: this runs after the
@@ -165,6 +192,12 @@ def _reset_timed_out_session(state: dict, sender: str) -> None:
     Module 3 deliberately has no conversation_events table (the data is
     discardable during the build).
 
+    Messages are NOT deleted. Since Module 5 they are the operator inbox's
+    record of the lead, and wiping them would blind the human to everything that
+    came before. The reset instead moves conversation_started_at to now, which
+    is the boundary get_recent_messages honours: the AI restarts from nothing
+    while the inbox still shows the whole relationship.
+
     Args:
         state (dict): The session dict to reset in place.
         sender (str): The lead's number, for logging.
@@ -175,7 +208,7 @@ def _reset_timed_out_session(state: dict, sender: str) -> None:
     else:
         logger.info("Session for %s timed out after a booking; restarting conversation.", sender)
 
-    state["history"] = []
+    state["conversation_started_at"] = datetime.now(timezone.utc)
     state["stage"] = "greeting"
     state["lead_name"] = None
     state["child_name"] = None
@@ -448,37 +481,40 @@ def _reoffer_message(slots: list[dict]) -> str:
 
 
 #
-# HISTORY HELPERS
+# LLM PAYLOAD
 #
 
-def _trim_history(history: list[dict[str, str]]) -> list[dict[str, str]]:
-    """Keep only the most recent max_history_turns turns (2 items each).
+def _to_llm_payload(recent: list[dict]) -> list[dict[str, str]]:
+    """Turn message rows into the {"role", "content"} list the LLM expects.
+
+    The lead becomes "user"; the AI and the operator both become "assistant",
+    since to the lead they are one continuous attendant (bot.messages
+    .author_to_role owns that mapping).
+
+    Leading assistant messages are dropped. The window is a fixed-size tail of
+    the conversation, so it can easily open in the middle of an operator's burst
+    of replies — and a payload whose first message is "assistant" is rejected by
+    the Anthropic-compatible endpoint. Trimming from the front costs the model a
+    little context; not trimming costs the lead their answer.
 
     Args:
-        history (list[dict[str, str]]): The conversation history.
+        recent (list[dict]): Rows from messages.get_recent_messages(), already
+            in chronological order.
 
     Returns:
-        list[dict[str, str]]: The trimmed history, most recent items kept.
+        list[dict[str, str]]: The conversation payload, starting at a user message.
     """
-    max_items: int = max_history_turns * 2
-    if len(history) > max_items:
-        return history[-max_items:]
-    return history
+    payload: list[dict[str, str]] = [
+        {"role": messages.author_to_role(row["author"]), "content": row["content"]}
+        for row in recent
+    ]
 
+    first_user = next((i for i, item in enumerate(payload) if item["role"] == "user"), None)
+    if first_user is None:
+        # Nothing from the lead in the window: there is no conversation to
+        # replay, and the caller's message is always appended before this runs.
+        return []
+    if first_user > 0:
+        logger.info("Dropped %d leading assistant message(s) from the LLM payload.", first_user)
 
-def _add_to_history(history: list, role: str, content: str) -> None:
-    """Append a message to the history in {"role", "content"} form.
-
-    Args:
-        history (list): The history list to append to.
-        role (str): "user" or "assistant".
-        content (str): The message text.
-
-    Raises:
-        ValueError: If role is not "user" or "assistant".
-    """
-    allowed_roles: set = {"user", "assistant"}
-    if role not in allowed_roles:
-        raise ValueError(f"Invalid role: {role!r}")
-
-    history.append({"role": role, "content": content})
+    return payload[first_user:]
