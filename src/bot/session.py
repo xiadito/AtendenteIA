@@ -1,5 +1,12 @@
+"""Data access for `sessions`: one row per lead, holding conversation STATE.
+
+The conversation itself is NOT here — it lives in `messages` (bot/messages.py),
+the single source of truth since Module 5. This module owns the typed state
+columns the AI reports in its action block, plus the two transient markers the
+operator takeover relies on (needs_resume_note, conversation_started_at).
+"""
+
 import logging
-import json
 
 from database.db import get_connection
 
@@ -27,24 +34,33 @@ valid_qualifications: set[str] = {
     "unqualified",
 }
 
-# Column names carried on the in-memory session dict, beyond "history". Kept in
-# one place so get_session/save_session/get_all_sessions never drift apart: a
-# column written by save_session but not read by get_session (or vice versa)
-# would make state silently vanish next turn.
-_STATE_COLUMNS: tuple[str, ...] = ("stage", "lead_name", "child_name", "qualification", "is_paused")
+# Column names carried on the in-memory session dict. Kept in one place so
+# get_session/save_session/get_all_sessions never drift apart: a column written
+# by save_session but not read by get_session (or vice versa) would make state
+# silently vanish next turn. save_session lists these by hand in its UPDATE, so
+# adding one here means adding it there too.
+_STATE_COLUMNS: tuple[str, ...] = (
+    "stage",
+    "lead_name",
+    "child_name",
+    "qualification",
+    "is_paused",
+    "needs_resume_note",
+    "conversation_started_at",
+)
 
 
 def _row_to_session(row: dict) -> dict:
     """Shape a sessions DB row into the session dict the app passes around.
 
     Args:
-        row (dict): A RealDictCursor row with history + the state columns + updated_at.
+        row (dict): A RealDictCursor row with the state columns + updated_at.
 
     Returns:
-        dict: {"history", "stage", "lead_name", "child_name", "qualification",
-        "is_paused", "updated_at"}.
+        dict: Every column in _STATE_COLUMNS, plus "updated_at". The
+        conversation itself is not here — bot/messages.py owns it.
     """
-    session: dict = {"history": row["history"], "updated_at": row["updated_at"]}
+    session: dict = {"updated_at": row["updated_at"]}
     for column in _STATE_COLUMNS:
         session[column] = row[column]
     return session
@@ -57,10 +73,11 @@ def get_session(sender: str) -> dict:
         sender (str): Customer number in the format "5521999999999".
 
     Returns:
-        dict: Session data — history plus the conversation-state columns
-        (stage, lead_name, child_name, qualification, is_paused) and updated_at.
+        dict: Session data — the conversation-state columns (stage, lead_name,
+        child_name, qualification, is_paused, needs_resume_note,
+        conversation_started_at) plus updated_at.
     """
-    select_columns = "history, " + ", ".join(_STATE_COLUMNS) + ", updated_at"
+    select_columns = ", ".join(_STATE_COLUMNS) + ", updated_at"
 
     with get_connection() as conn:
         with conn.cursor() as cur:
@@ -68,12 +85,15 @@ def get_session(sender: str) -> dict:
             row = cur.fetchone()
 
             if row is None:
+                # Only the primary key is supplied: every other column has a
+                # column default, including the conversation_started_at that
+                # bounds the AI's window from this moment on.
                 cur.execute(
                     f"""
-                    INSERT INTO sessions (sender, history) VALUES (%s, %s::jsonb)
+                    INSERT INTO sessions (sender) VALUES (%s)
                     RETURNING {select_columns}
                     """,
-                    (sender, json.dumps([])),
+                    (sender,),
                 )
                 row = cur.fetchone()
                 conn.commit()
@@ -83,49 +103,58 @@ def get_session(sender: str) -> dict:
 
 
 def save_session(sender: str, session: dict) -> None:
-    """Persist a client's session — history and all conversation-state columns.
+    """Persist a client's session — every conversation-state column.
 
     Every state column is written here. It must stay in sync with the columns
     get_session reads back, or state written one turn disappears the next.
+
+    conversation_started_at is only overwritten when the caller supplies it
+    (the 1h inactivity timeout does); COALESCE keeps the stored boundary
+    otherwise, so an ordinary turn never silently restarts the AI's window.
 
     Args:
         sender (str): Customer number in the format "5521999999999".
         session (dict): Session data to save. Missing keys fall back to their
             column defaults so a partial dict never crashes the update.
     """
-    history = session.get("history", [])
-
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 UPDATE sessions
-                SET history = %s::jsonb,
-                    stage = %s,
+                SET stage = %s,
                     lead_name = %s,
                     child_name = %s,
                     qualification = %s,
                     is_paused = %s,
+                    needs_resume_note = %s,
+                    conversation_started_at = COALESCE(%s, conversation_started_at),
                     updated_at = NOW()
                 WHERE sender = %s
                 """,
                 (
-                    json.dumps(history),
                     session.get("stage", "greeting"),
                     session.get("lead_name"),
                     session.get("child_name"),
                     session.get("qualification", "unknown"),
                     session.get("is_paused", False),
+                    session.get("needs_resume_note", False),
+                    session.get("conversation_started_at"),
                     sender,
                 ),
             )
             conn.commit()
-            # Never log history/PII (public repo): sender + stage only.
+            # Never log message content/PII (public repo): sender + stage only.
             logger.info("Session saved for sender: %s (stage=%s).", sender, session.get("stage", "greeting"))
 
 
 def clear_session(sender: str) -> None:
     """Delete a client's session, resetting their conversation to a fresh start.
+
+    The lead's messages go with it: messages.sender carries ON DELETE CASCADE,
+    so this wipes the thread too. That is the intent — forgetting a lead should
+    not leave an orphan conversation nobody can continue — but it means this is
+    the one call that destroys inbox history, not just state.
 
     Args:
         sender (str): Customer number in the format "5521999999999".
@@ -144,9 +173,9 @@ def get_all_sessions() -> dict:
 
     Returns:
         dict: {sender: session_dict}. Does not log its contents (avoids dumping
-        lead history/PII into logs on a public repo).
+        lead state/PII into logs on a public repo).
     """
-    select_columns = "sender, history, " + ", ".join(_STATE_COLUMNS) + ", updated_at"
+    select_columns = "sender, " + ", ".join(_STATE_COLUMNS) + ", updated_at"
 
     with get_connection() as conn:
         with conn.cursor() as cur:
