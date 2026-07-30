@@ -102,6 +102,27 @@ def get_session(sender: str) -> dict:
             return _row_to_session(row)
 
 
+def session_exists(sender: str) -> bool:
+    """Check whether a lead has a session, WITHOUT creating one.
+
+    get_session() creates on miss, which is right for an incoming WhatsApp
+    message but wrong for the dashboard: the inbox routes take the sender from
+    the URL, so calling get_session there would mint a phantom session for any
+    number someone typed. This is the read-only lookup those routes use to 404
+    instead.
+
+    Args:
+        sender (str): Customer number in the format "5521999999999".
+
+    Returns:
+        bool: True if a sessions row exists for this sender.
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM sessions WHERE sender = %s", (sender,))
+            return cur.fetchone() is not None
+
+
 def save_session(sender: str, session: dict) -> None:
     """Persist a client's session — every conversation-state column.
 

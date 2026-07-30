@@ -1,4 +1,4 @@
-from flask import Blueprint, jsonify, request, render_template, redirect, url_for, session
+from flask import Blueprint, abort, jsonify, request, render_template, redirect, url_for, session
 from functools import wraps
 from config import Config
 import logging
@@ -283,10 +283,22 @@ def inbox_conversations():
     return render_template("_inbox_list.html", conversations=messages.list_conversations())
 
 
+def _require_conversation(sender: str) -> None:
+    """Aborta com 404 se o número da URL não tem sessão.
+
+    As rotas do inbox recebem o `sender` pela URL. Usar get_session() aqui
+    criaria uma sessão para qualquer número digitado — uma conversa fantasma que
+    passaria a aparecer na lista do operador. Esta checagem é só leitura.
+    """
+    if not session_store.session_exists(sender):
+        abort(404)
+
+
 @dashboard_bp.route("/inbox/<sender>")
 @_require_auth
 def inbox_conversation(sender: str):
     """Abre uma conversa e marca as mensagens do lead como lidas."""
+    _require_conversation(sender)
     state = session_store.get_session(sender)
     messages.mark_conversation_read(sender)
 
@@ -307,6 +319,7 @@ def inbox_conversation_messages(sender: str):
     Também marca como lidas: se o operador está com a conversa aberta na tela,
     ele está lendo o que chega.
     """
+    _require_conversation(sender)
     messages.mark_conversation_read(sender)
     return render_template("_conversation_messages.html", conversation=messages.get_conversation(sender))
 
@@ -327,6 +340,7 @@ def inbox_reply(sender: str):
     um aviso dentro do HTML, com status 200: o HTMX não faz swap em 4xx/5xx, e
     um 500 nu deixaria o operador olhando uma tela muda sem saber se enviou.
     """
+    _require_conversation(sender)
     text: str = request.form.get("text", "").strip()
 
     if not text:
@@ -358,6 +372,7 @@ def inbox_resume(sender: str):
     não recebe um valor que nunca viu — e arma needs_resume_note para que o
     próximo prompt avise que um humano acabou de devolver a conversa.
     """
+    _require_conversation(sender)
     state = session_store.get_session(sender)
     state["is_paused"] = False
     state["stage"] = "interest"
