@@ -31,7 +31,9 @@ def send_message(to: str, text: str) -> str:
             from_ = Config.TWILIO_SANDBOX_NUMBER,
             to = f"whatsapp:+{to}"
         )
-        logger.info(f"Message sent to {to}: {text} | SID: {message.sid}")
+        # Never log the text itself: this carries lead conversations and the
+        # repository is public (see bot/messages.py).
+        logger.info(f"Message sent to {to} ({len(text)} chars) | SID: {message.sid}")
         return message.sid
     except Exception as e:
         #All the erros of twilio will be catched here, and we can log them for future debugging.

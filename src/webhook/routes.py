@@ -5,7 +5,9 @@ import logging
 import threading
 from whatsapp.whatsapp_service import send_message
 from bot.handlers import handle_text_message
+import bot.messages as messages
 import bot.owner_notifications as owner_notifications
+import bot.session as session_store
 import integrations.store as store
 
 
@@ -132,7 +134,9 @@ def receive_twilio() -> tuple:
     body: str   = request.form.get("Body")  # texto da mensagem
     to: str     = request.form.get("To")    # seu número do sandbox
 
-    logger.info(f"Mensagem recebida de {sender}: {body}")
+    # Nunca logamos o texto da mensagem: o repositório é público e essas
+    # mensagens são conversas inteiras de leads (ver bot/messages.py).
+    logger.info(f"Mensagem recebida de {sender}")
 
     # Verifica se os campos essenciais chegaram
     if not sender or not body:
@@ -143,7 +147,7 @@ def receive_twilio() -> tuple:
     # Twilio sends "whatsapp:+5521999999999" we only need the numbers: "5521999999999"
     # cleans the sender number - .replace() replace one substring for another — here we remove "whatsapp:+"
     clean_number = sender.replace("whatsapp:+", "")
-    logger.info(f"Número limpo: {clean_number} | Mensagem: {body }")
+    logger.info(f"Número limpo: {clean_number} | {len(body)} caractere(s)")
 
     # A message from the gym owner's own number is a reply to a notification,
     # not a lead starting/continuing a conversation — route it separately.
@@ -174,7 +178,7 @@ def receive_twilio_owner(owner_phone: str, body: str) -> None:
     response = mapping.get(stripped)
 
     if response is None:
-        logger.info(f"Owner {owner_phone} sent an unrecognized reply: {body[:80]}")
+        logger.info(f"Owner {owner_phone} sent an unrecognized reply")
         send_message(owner_phone, "Não entendi. Responda 1 para confirmar ou 2 para cancelar.")
         return
 
@@ -235,3 +239,147 @@ def logout():
 def menu():
     """Hub de navegação pós-login: integrações e futuras features."""
     return render_template("menu.html")
+
+
+#
+# OPERATOR INBOX (Module 5)
+#
+# The operator reads and answers leads from here. Replies go out through the
+# gym's own Twilio number, so the lead sees one continuous thread and never
+# learns whether a human or the AI answered.
+#
+# Not to be confused with the Module 4 owner flow: the OWNER answers
+# notifications over WhatsApp (receive_twilio_owner), while the OPERATOR answers
+# leads from this dashboard. Different people, different channels, no overlap.
+#
+# None of these routes ever log message content — the repository is public and
+# these screens handle whole conversations.
+#
+
+# How often the HTMX-polled partials refresh, in seconds. Modest on purpose:
+# the inbox is a handful of operators on one gym, not a public endpoint.
+INBOX_POLL_SECONDS: int = 5
+
+
+@dashboard_bp.route("/inbox")
+@_require_auth
+def inbox():
+    """Lista todas as conversas, pausadas e não lidas no topo."""
+    return render_template(
+        "inbox.html",
+        conversations=messages.list_conversations(),
+        poll_seconds=INBOX_POLL_SECONDS,
+    )
+
+
+@dashboard_bp.route("/inbox/conversations")
+@_require_auth
+def inbox_conversations():
+    """Parcial da lista, alvo do polling HTMX.
+
+    Separada da página para que o polling troque só as linhas, sem recarregar
+    o <head>, o tema e o script a cada ciclo.
+    """
+    return render_template("_inbox_list.html", conversations=messages.list_conversations())
+
+
+@dashboard_bp.route("/inbox/<sender>")
+@_require_auth
+def inbox_conversation(sender: str):
+    """Abre uma conversa e marca as mensagens do lead como lidas."""
+    state = session_store.get_session(sender)
+    messages.mark_conversation_read(sender)
+
+    return render_template(
+        "conversation.html",
+        sender=sender,
+        state=state,
+        conversation=messages.get_conversation(sender),
+        poll_seconds=INBOX_POLL_SECONDS,
+    )
+
+
+@dashboard_bp.route("/inbox/<sender>/messages")
+@_require_auth
+def inbox_conversation_messages(sender: str):
+    """Parcial das mensagens, alvo do polling HTMX.
+
+    Também marca como lidas: se o operador está com a conversa aberta na tela,
+    ele está lendo o que chega.
+    """
+    messages.mark_conversation_read(sender)
+    return render_template("_conversation_messages.html", conversation=messages.get_conversation(sender))
+
+
+@dashboard_bp.route("/inbox/<sender>/reply", methods=["POST"])
+@_require_auth
+def inbox_reply(sender: str):
+    """Envia a resposta do operador ao lead e registra a mensagem.
+
+    ORDEM DELIBERADA — envia primeiro, grava só no sucesso. É o inverso da rota
+    da IA (grava-depois-envia), porque quem está no controle aqui é uma pessoa
+    olhando a tela: se o envio falhar ela reenvia na hora, e o registro precisa
+    refletir o que o lead de fato recebeu. Gravar antes deixaria uma mensagem
+    fantasma no histórico — e o próximo turno da IA leria como dito algo que
+    nunca chegou ao lead.
+
+    send_message re-lança em falha; a exceção é capturada aqui e devolvida como
+    um aviso dentro do HTML, com status 200: o HTMX não faz swap em 4xx/5xx, e
+    um 500 nu deixaria o operador olhando uma tela muda sem saber se enviou.
+    """
+    text: str = request.form.get("text", "").strip()
+
+    if not text:
+        return _conversation_messages_response(sender, error="Digite uma mensagem antes de enviar.")
+
+    try:
+        send_message(sender, text)
+    except Exception:
+        logger.exception(f"Falha ao enviar resposta do operador para {sender}")
+        return _conversation_messages_response(
+            sender,
+            error="Não foi possível enviar a mensagem. Verifique a conexão e tente de novo.",
+        )
+
+    messages.add_message(sender, "operator", text, is_read=True)
+    return _conversation_messages_response(sender)
+
+
+@dashboard_bp.route("/inbox/<sender>/resume", methods=["POST"])
+@_require_auth
+def inbox_resume(sender: str):
+    """Devolve a conversa à IA, encerrando o takeover.
+
+    Até o Módulo 5 nada limpava is_paused: um handoff pausava o lead para
+    sempre. Esta rota é a única saída da pausa.
+
+    Reseta o stage para 'interest' — um estágio que já existe em
+    session.valid_stages e que a camada protegida do prompt descreve, então a IA
+    não recebe um valor que nunca viu — e arma needs_resume_note para que o
+    próximo prompt avise que um humano acabou de devolver a conversa.
+    """
+    state = session_store.get_session(sender)
+    state["is_paused"] = False
+    state["stage"] = "interest"
+    state["needs_resume_note"] = True
+    session_store.save_session(sender, state)
+
+    logger.info(f"Conversa de {sender} devolvida à IA pelo operador.")
+    return redirect(url_for("dashboard.inbox_conversation", sender=sender))
+
+
+def _conversation_messages_response(sender: str, error: str | None = None):
+    """Renderiza a parcial de mensagens, com um aviso opcional ao operador.
+
+    Args:
+        sender (str): Número do lead.
+        error (str | None): Mensagem de erro a exibir, em português.
+
+    Returns:
+        tuple: (HTML, 200). Sempre 200 — ver a docstring de inbox_reply.
+    """
+    return render_template(
+        "_conversation_messages.html",
+        conversation=messages.get_conversation(sender),
+        error=error,
+    ), 200
