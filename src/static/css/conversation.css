@@ -1,0 +1,176 @@
+/* Pareado com templates/conversation.html (e com a parcial
+   _conversation_messages.html, renderizada dentro dela). */
+
+body {
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    padding: 2.5rem 1.5rem;
+    box-sizing: border-box;
+}
+
+.card {
+    background: var(--surface);
+    padding: 2rem;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    width: 100%;
+    max-width: 720px;
+}
+
+.back-link {
+    display: inline-block;
+    margin-bottom: 1rem;
+    font-size: 0.85rem;
+    color: #888;
+    text-decoration: none;
+}
+
+.back-link:hover { color: var(--text); }
+
+.conversation-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+h1 {
+    font-size: 1.3rem;
+    color: var(--text);
+    margin: 0 0 0.2rem;
+}
+
+.subtitle {
+    color: var(--text);
+    opacity: 0.65;
+    font-size: 0.85rem;
+    margin: 0;
+}
+
+.btn-resume {
+    background: none;
+    border: 1px solid var(--brand);
+    color: var(--brand);
+    padding: 0.45rem 0.9rem;
+    border-radius: 4px;
+    font-size: 0.88rem;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.btn-resume:hover { background: var(--brand); color: #ffffff; }
+
+.takeover-banner,
+.ai-banner {
+    margin: 1.25rem 0;
+    padding: 0.6rem 0.85rem;
+    border-radius: 6px;
+    font-size: 0.85rem;
+}
+
+.takeover-banner { background: #fff3cd; color: #856404; }
+.ai-banner       { background: #f0f0f0; color: #666666; }
+
+.send-error {
+    margin-bottom: 1rem;
+    padding: 0.6rem 0.85rem;
+    border-radius: 6px;
+    background: #f8d7da;
+    color: #721c24;
+    font-size: 0.85rem;
+}
+
+.empty-state {
+    color: var(--text);
+    opacity: 0.6;
+    font-size: 0.9rem;
+    text-align: center;
+    padding: 2rem 0;
+}
+
+.message-list {
+    list-style: none;
+    margin: 0;
+    padding: 0.5rem 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    max-height: 55vh;
+    overflow-y: auto;
+}
+
+.message { display: flex; }
+
+/* O lead à esquerda; quem responde (IA ou operador) à direita — do ponto de
+   vista do painel os dois são "nós". A cor distingue qual dos dois falou. */
+.message-lead     { justify-content: flex-start; }
+.message-ai,
+.message-operator { justify-content: flex-end; }
+
+.message-bubble {
+    max-width: 78%;
+    padding: 0.55rem 0.8rem;
+    border-radius: 10px;
+    border: 1px solid var(--input-border);
+}
+
+.message-lead     .message-bubble { border-bottom-left-radius: 2px; }
+.message-ai       .message-bubble { border-bottom-right-radius: 2px; background: rgba(45, 122, 45, 0.10); }
+.message-operator .message-bubble { border-bottom-right-radius: 2px; background: rgba(45, 122, 45, 0.22); }
+
+.message-author {
+    display: block;
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    opacity: 0.6;
+}
+
+.message-content {
+    margin: 0.2rem 0 0.25rem;
+    font-size: 0.92rem;
+    color: var(--text);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.message-time {
+    font-size: 0.72rem;
+    opacity: 0.5;
+}
+
+.reply-form {
+    display: flex;
+    gap: 0.6rem;
+    align-items: flex-end;
+    margin-top: 1.25rem;
+}
+
+.reply-form textarea {
+    flex: 1;
+    padding: 0.6rem;
+    border: 1px solid var(--input-border);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.92rem;
+    resize: vertical;
+}
+
+.reply-form button {
+    background: var(--brand);
+    border: none;
+    color: #ffffff;
+    padding: 0.6rem 1.2rem;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.reply-form button:hover { background: var(--brand-dark); }

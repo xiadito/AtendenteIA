@@ -50,6 +50,7 @@ sys.path.insert(0, str(SRC_DIR))
 
 import bot.ai_context as ai_context  # noqa: E402
 import bot.bookings as bookings  # noqa: E402
+import bot.messages as messages  # noqa: E402
 import bot.handlers as handlers  # noqa: E402
 import bot.scheduling as scheduling  # noqa: E402
 import integrations.store as store  # noqa: E402
@@ -66,7 +67,10 @@ MIGRATION_CONFIGS = "005_create_ai_configs"
 # checking schema_migrations for them proves nothing — any database has 001
 # applied, including one created before those columns existed. The prereq
 # therefore checks the columns themselves, in information_schema.
-STATE_COLUMNS = {"stage", "lead_name", "child_name", "qualification", "is_paused"}
+STATE_COLUMNS = {
+    "stage", "lead_name", "child_name", "qualification", "is_paused",
+    "needs_resume_note", "conversation_started_at",
+}
 
 DEFAULT_REPORT_DIR = SRC_DIR / "tests" / "outputs"
 
@@ -366,7 +370,8 @@ class AiActionSuite:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT stage, qualification, lead_name, child_name, is_paused, history
+                    SELECT stage, qualification, lead_name, child_name, is_paused,
+                           needs_resume_note, conversation_started_at
                     FROM sessions WHERE sender = %s
                     """,
                     (sender,),
@@ -588,9 +593,17 @@ class AiActionSuite:
                        qualification="unknown", action="none"))
         expect(any("closed_no_booking" in m for m in log.messages),
                "o timeout deveria registrar closed_no_booking no log")
-        history = self._session_row(sender)["history"]
-        expect_equal(len(history), 2, "histórico deveria ter reiniciado (só o novo turno)")
-        return "timeout encerra, registra closed_no_booking e reinicia do zero"
+
+        # Desde o Módulo 5 o timeout não apaga mensagem nenhuma: ele move a
+        # fronteira conversation_started_at. O inbox continua enxergando a
+        # conversa toda (4 mensagens), mas a janela da IA recomeça no novo turno.
+        row = self._session_row(sender)
+        boundary = row["conversation_started_at"]
+        window = messages.get_recent_messages(sender, 20, since=boundary)
+        expect_equal(len(window), 2, "a janela da IA deveria ter reiniciado (só o novo turno)")
+        expect_equal(len(messages.get_conversation(sender)), 4,
+                     "o inbox deveria manter as mensagens anteriores ao timeout")
+        return "timeout encerra, registra closed_no_booking e reinicia a janela sem apagar o inbox"
 
     def test_timeout_does_not_unpause(self) -> str:
         sender = self.next_sender()

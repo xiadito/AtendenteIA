@@ -66,12 +66,19 @@ python tests/test_ai_action/test_ai_action_suite.py --skip-live
 
 # Owner notifications — enqueue, cron drain, and owner-reply recording (fully deterministic)
 python tests/test_owner_notifications/test_owner_notifications_suite.py
+
+# Module 5 — operator inbox and takeover (LLM and WhatsApp both stubbed; fully deterministic)
+python tests/test_inbox/test_inbox_suite.py
 ```
 
 Each suite prints a PASS/FAIL report and exits non-zero on failure; SKIPs don't fail the run.
 Each module also has a manual CLI (`test_scheduling.py`, `test_ai_action.py`,
-`test_owner_notifications.py`) and a testing roteiro (`SCHEDULING_ENGINE_TESTING.md`,
-`AI_ACTION_TESTING.md`, `OWNER_NOTIFICATIONS_TESTING.md`).
+`test_owner_notifications.py`, `test_inbox.py`) and a testing roteiro
+(`SCHEDULING_ENGINE_TESTING.md`, `AI_ACTION_TESTING.md`, `OWNER_NOTIFICATIONS_TESTING.md`,
+`INBOX_TESTING.md`).
+
+Each suite owns a sender prefix so their teardowns can never collide: `5521000...` (scheduling),
+`5522000...` (AI action), `5523000...` (owner notifications), `5524000...` (inbox).
 
 ### Inspecting the database with DBeaver
 
@@ -97,12 +104,23 @@ Three settings that save real time:
 Queries worth keeping in a saved SQL editor:
 
 ```sql
--- Migration history: 001-006, all six present
+-- Migration history: 001-007, all seven present
 SELECT version FROM schema_migrations ORDER BY version;
 
 -- Funnel state per lead (why the state lives in columns, not JSONB)
 SELECT sender, stage, lead_name, child_name, qualification, is_paused, updated_at
 FROM sessions ORDER BY updated_at DESC;
+
+-- One conversation, in the order the inbox shows it (tie-break by id — see Session Storage)
+SELECT author, is_read, created_at, content
+FROM messages WHERE sender = 'whatsapp:+55...' ORDER BY created_at, id;
+
+-- What the operator still has to read
+SELECT sender, COUNT(*) AS unread FROM messages
+WHERE author = 'lead' AND is_read = FALSE GROUP BY sender ORDER BY unread DESC;
+
+-- Conversations someone took over and may not have handed back
+SELECT sender, stage, updated_at FROM sessions WHERE is_paused = TRUE;
 
 -- Bookings the AI closed, newest first
 SELECT sender, lead_name, child_name, class_type, slot_start, status
@@ -115,18 +133,23 @@ UPDATE owners SET owner_phone = '5521999999999' WHERE tenant_id = 'default';
 SELECT event_type, lead_sender, booking_id, status, attempts, owner_response, created_at
 FROM owner_notifications ORDER BY created_at DESC;
 
--- Un-pause a lead parked by a handoff (nothing does this automatically until a future feature)
+-- Un-pause a lead by hand. Normally the inbox's "Devolver para a IA" button does this, and it
+-- also resets the stage and arms the resume note — this bare UPDATE does neither.
 UPDATE sessions SET is_paused = FALSE WHERE sender = 'whatsapp:+55...';
 
--- Reset one lead to a fresh greeting without touching the others
+-- Reset one lead to a fresh greeting without touching the others.
+-- CAREFUL: this deletes their messages too (ON DELETE CASCADE).
 DELETE FROM sessions WHERE sender = 'whatsapp:+55...';
 ```
 
 **Don't `TRUNCATE owners`** when clearing test data — it holds the Google Calendar tokens, and
-wiping it means redoing the whole OAuth flow. `sessions` and `trial_bookings` are safe to empty.
+wiping it means redoing the whole OAuth flow. `sessions`, `messages` and `trial_bookings` are
+safe to empty (emptying `sessions` empties `messages` with it).
 
-`history` is `jsonb`; double-clicking the cell opens DBeaver's JSON viewer, which is the
-readable way to confirm the 10-turn cap and that the stored text is **block-stripped**.
+`messages.content` is plain `TEXT`, so the conversation reads straight out of the grid — sort by
+`created_at, id` and it is exactly what the operator sees in the inbox. It is also the readable
+way to confirm the AI's stored text is **block-stripped**: no `<corujai_action>` should ever
+appear in a row.
 
 ### Dependencies
 
@@ -151,14 +174,35 @@ Twilio POST /webhook
   → webhook/routes.py::receive_twilio()
     → integrations/store.py::get_owner_by_phone()  (owner reply? route to receive_twilio_owner() instead)
     → bot/handlers.py::handle_text_message()
-      → bot/session.py           (Postgres-backed session + conversation state)
+      → bot/session.py           (Postgres-backed conversation state)
+      → bot/messages.py          (records the lead's message — ALSO when paused, then returns)
       → bot/ai_configs.py        (per-tenant customizable prompt layer)
       → bot/ai_context.py        (cached slots + build_system_prompt)
-      → bot/ai_service.py::get_ai_response(history, system_prompt)  (calls LLM)
+      → bot/ai_service.py::get_ai_response(payload, system_prompt)  (payload = last N of messages)
       → bot/scheduling.py::book_slot()  (executes a booking, if the AI asked)
+      → bot/messages.py          (records the AI's outgoing, block-stripped text)
       → bot/owner_notifications.py::enqueue_notification()  (after save_session, only logs on failure)
       → whatsapp/whatsapp_service.py::send_message()  (sends reply via Twilio) -> Future migration to Whatsapp API
 ```
+
+There is a second way into a conversation, and it does not come from Twilio — the **operator
+inbox** (Module 5). A human answers from the dashboard:
+
+```
+Operator POST /dashboard/inbox/<sender>/reply
+  → webhook/routes.py::inbox_reply()
+    → whatsapp/whatsapp_service.py::send_message()   (FIRST — see Operator Inbox)
+    → bot/messages.py::add_message(author="operator") (only if the send succeeded)
+
+Operator POST /dashboard/inbox/<sender>/resume
+  → webhook/routes.py::inbox_resume()
+    → bot/session.py::save_session()  (is_paused=False, stage="interest", needs_resume_note=True)
+```
+
+**Three roles, do not conflate them.** The **lead** writes over WhatsApp and is always routed to
+`handle_text_message()`, even while paused. The **owner** replies `1`/`2` to notifications over
+WhatsApp and is routed to `receive_twilio_owner()`. The **operator** works only from the
+dashboard and never over WhatsApp at all.
 
 A closed booking or a handoff does not notify the owner synchronously: `handle_text_message()`
 only enqueues a row in `owner_notifications` (isolated in its own `try/except` that never blocks
@@ -176,26 +220,38 @@ on every reply, appends a `<corujai_action>{...}</corujai_action>` block that th
 parses to update conversation state and execute actions. The flow in
 `bot/handlers.py::handle_text_message()` — **order matters**:
 
-1. Load the session (history **and** the conversation-state columns) from `bot/session.py`.
-2. **Pause check FIRST**: if `is_paused` (a handoff happened), return without answering — no
-   token cost, and the pause is structurally exempt from the timeout.
+1. Load the conversation-state columns from `bot/session.py`.
+2. **Pause check FIRST**: if `is_paused` (a handoff happened, or the operator took over),
+   **record the lead's message** in `messages` and return without answering — no token cost,
+   and the pause is structurally exempt from the timeout. The recording is the whole point:
+   an operator who cannot read what the lead said during the takeover has nothing to answer.
 3. **Lazy 1h inactivity timeout** from `sessions.updated_at` (no scheduler): a non-`booked`
    conversation is recorded as `closed_no_booking` (log only) and reset to a fresh greeting.
+   It stamps `conversation_started_at = NOW()` instead of deleting anything — see Session Storage.
 4. Build the per-turn context: cached available slots (`ai_context.get_cached_slots()`) +
    the lead's active bookings (`bookings.list_active_bookings_by_sender()`, injected always) →
-   `ai_context.build_system_prompt()`.
-5. Append the user turn, call `get_ai_response(history, system_prompt)`.
+   `ai_context.build_system_prompt()`. If `needs_resume_note` is set, the resume note rides
+   along and the marker is cleared in the same pass, so it is delivered exactly once.
+5. Record the lead's message, then call `get_ai_response(payload, system_prompt)` where the
+   payload is the last `MAX_PAYLOAD_MESSAGES` (20) rows of `messages` since
+   `conversation_started_at`, mapped to roles by `_to_llm_payload()`.
 6. Parse the action block defensively (`_extract_action`): tolerates markdown fences, uses the
    **last** of multiple blocks, degrades to no-action on malformed/absent/unclosed.
 7. Apply state **leniently** (invalid `stage`/`qualification` keep the previous value) and the
    `book`/`handoff` action **strictly** (a missing or hallucinated `event_id` — one not among
    the injected slots — is refused in Python). The final `stage` follows the real `book_slot()`
    outcome, not the model's optimistic claim.
-8. Persist the state; store the **outgoing** (block-stripped) text in history; send it.
+8. Persist the state, record the **outgoing** (block-stripped) text in `messages`, and send it.
 
-**Invariant:** no parse or action failure may stop the reply from reaching the lead. History
-is capped at the last 10 turns (`max_history_turns = 10`), and stores the message **without**
-the action block (the state lives in columns, so the block would only waste tokens).
+**Invariant:** no parse or action failure may stop the reply from reaching the lead. The stored
+text is the message **without** the action block (the state lives in columns, so the block would
+only waste tokens — and the operator would see it in the inbox).
+
+**Payload assembly (`_to_llm_payload`).** `lead` → `user`; `ai` **and** `operator` →
+`assistant`, because to the lead they are one continuous attendant. Leading `assistant`
+messages are dropped: the window is a fixed-size tail, so it can open in the middle of an
+operator's burst, and the Anthropic-compatible endpoint rejects a payload starting on
+`assistant`.
 
 The grocery-store `ORDER_CONFIRMED:` path and the whole `orders` feature behind it are gone
 (see Session Storage).
@@ -208,22 +264,40 @@ Anthropic-compatible endpoint (`https://api.anthropic.com/v1/`) with Claude Haik
 (`AI_MODEL=claude-haiku-4-5-20251001`). Switching providers, if ever needed again, is
 still just an env var change — no code changes required.
 
-`get_ai_response(history, system_prompt)` takes the system prompt **per turn** (it is no
+`get_ai_response(payload, system_prompt)` takes the system prompt **per turn** (it is no
 longer imported): Module 3 rebuilds it every message from the protected layer + tenant config
-+ slots + the lead's bookings.
++ slots + the lead's bookings. Since Module 5 the payload is a window over `messages`, not a
+JSONB blob carried on the session.
 
 ### Session Storage
 
 `bot/session.py` persists sessions in **Postgres** via `database/db.py::get_connection()`
-(psycopg2 with `RealDictCursor`, so rows come back as dicts). Two tables are involved:
+(psycopg2 with `RealDictCursor`, so rows come back as dicts). Three tables matter:
 
-- `sessions` — one row per `sender`, created complete by migration 001. `history` is `jsonb`;
-  the Module 3 **conversation state** lives in discrete typed columns (`stage`, `lead_name`,
+- `messages` — **the single source of truth for a conversation** (migration 007, Module 5),
+  owned by `bot/messages.py`. One row per message, `author` ∈ `lead | ai | operator`
+  (validated in Python, no DB `CHECK`). The operator inbox reads it whole; the AI reads a
+  window of it. `is_read` only carries meaning for `author = 'lead'` — it answers "has the
+  **operator** seen this?" — so AI and operator messages are born read.
+- `sessions` — one row per `sender`, created complete by migration 001, holding **state only**.
+  The Module 3 **conversation state** lives in discrete typed columns (`stage`, `lead_name`,
   `child_name`, `qualification`, `is_paused`), not JSONB, so the funnel is explorable with
-  plain SQL. Indexed by `stage` (`idx_sessions_stage`).
+  plain SQL. Module 5 adds two transient markers, `needs_resume_note` and
+  `conversation_started_at`. Indexed by `stage` (`idx_sessions_stage`).
 - `trial_bookings` — one row per trial-class booking (Module 2), with `child_name` for
   `[BABY]`/`[CRIANCAS]` classes (Module 3 preliminary step), also created complete by
   migration 004.
+
+**`sessions.history` is gone.** Until Module 5 the conversation lived in a `jsonb` column
+capped at 10 turns and readable by nothing but the AI. Keeping it alongside `messages` would
+mean two records of one conversation, which would inevitably drift, so it was removed from
+migration 001 rather than left in place.
+
+**`conversation_started_at` is the AI's window boundary.** The 1h timeout used to blank
+`history`; it now stamps this column instead. `messages.get_recent_messages(sender, n, since=)`
+honours it, so the AI genuinely restarts while `get_conversation()` still returns the whole
+thread to the operator — deleting the messages would blind the human to everything that came
+before.
 
 Other tables exist but are not touched by `session.py`: `owners` (migration 003, Google
 Calendar credentials + `owner_phone`) and `ai_configs` (migration 005, the customizable prompt
@@ -235,11 +309,24 @@ Request Flow and `src/tests/test_owner_notifications/OWNER_NOTIFICATIONS_TESTING
 bookings, not orders), and was then deleted end to end: the `orders` table, `save_order()`,
 `get_all_orders()`, `update_order_status()`, `valid_order_statuses`, `database/seed.py`, and the
 `/dashboard/index` + `/dashboard/update-order-status` routes with their template and stylesheet.
-`clear_session()` now deletes only the session row. Nothing in the codebase references `orders`.
+Nothing in the codebase references `orders`.
 
 **Trap:** `get_session()`, `save_session()` and `get_all_sessions()` must read/write the *same*
 column set (they share `_STATE_COLUMNS`/`_row_to_session`) — a column written by one but not
-read by another makes state silently vanish next turn.
+read by another makes state silently vanish next turn. `save_session()` also lists its columns
+by hand in the `UPDATE`, so a new state column needs adding in **both** places.
+
+**Trap:** `get_session()` **creates** a row on miss, which is right for an incoming WhatsApp
+message and wrong for the dashboard, where the sender comes from the URL. `session_exists()`
+is the read-only lookup the inbox routes use to `404` instead of minting a phantom conversation.
+
+**Trap:** `clear_session()` now deletes the lead's **messages** too — `messages.sender` carries
+`ON DELETE CASCADE`. That cascade is load-bearing: without it every `DELETE FROM sessions`
+(the Module 3 test CLI's `reset`, both suites' teardown) would fail on a foreign-key violation.
+
+**Trap:** never order `messages` by `created_at` alone. The column defaults to `NOW()`, which is
+`transaction_timestamp()` — rows written in one transaction share an instant. Every query in
+`bot/messages.py` sorts by `(created_at, id)`.
 
 `valid_stages` and `valid_qualifications` (module-level `set`s in
 `session.py`) are the single source of truth for their allowed values — validated in Python,
@@ -253,28 +340,31 @@ with **no DB `CHECK`**, so widening an enum is a code change with no migration (
 `database/migrations/` in filename order, recording each version so it never re-runs.
 There is no ORM — SQLAlchemy/Alembic are deliberately *not* dependencies.
 
-The sequence is **contiguous, 001–006**, and each table is created complete by a single
+The sequence is **contiguous, 001–007**, and each table is created complete by a single
 migration — there are no `ALTER TABLE` follow-ups:
 
 | Version | Creates |
 |---|---|
-| `001_create_sessions.sql` | `sessions` (incl. all conversation-state columns) + `idx_sessions_stage` |
+| `001_create_sessions.sql` | `sessions` (state columns only — **no `history`** — incl. `needs_resume_note` and `conversation_started_at`) + `idx_sessions_stage` |
 | `002_create_products.sql` | `products` + indexes on `external_id`, `is_active`, `category` |
 | `003_create_owners.sql` | `owners` (Google Calendar credentials + `owner_phone`) + seeds the `default` tenant row |
 | `004_create_trial_bookings.sql` | `trial_bookings` (incl. `child_name`) + indexes on `sender`, `slot_start`, `calendar_event_id` |
 | `005_create_ai_configs.sql` | `ai_configs` + seeds the `default` tenant config |
 | `006_create_owner_notifications.sql` | `owner_notifications` (the owner-notification queue) + two partial unique indexes (idempotency per `event_type`) + indexes on `status` and `owner_phone` |
+| `007_create_messages.sql` | `messages` (the conversation, FK to `sessions` `ON DELETE CASCADE`) + `(sender, created_at)` and a partial index for the unread count |
 
-**The "never edit an applied migration" rule is currently suspended, on purpose.** While the
-project is pre-deploy the only database is the local `corujai`, recreated from empty at will,
-so there is no applied history to protect. Late schema decisions were therefore *folded back
-into the base migration* rather than appended as `ALTER`s — `child_name` into 004 (`c44494e`),
-the conversation-state columns into 001 (`7ef92cd`), `owner_phone` into 003 — and the leftover
-numbers were closed up (`8e4ea54`). The payoff is that each migration reads as one coherent
-table definition with its whole rationale in the header, instead of a design spread over
-several files.
+**The "never edit an applied migration" rule was suspended while the project was pre-deploy —
+and Module 5 was the last time.** With no database created anywhere, there was no applied
+history to protect, so late schema decisions were *folded back into the base migration* rather
+than appended as `ALTER`s: `child_name` into 004 (`c44494e`), the conversation-state columns
+into 001 (`7ef92cd`), `owner_phone` into 003, and finally the `history` removal plus the two
+takeover markers into 001 again. The payoff is that each migration reads as one coherent table
+definition with its whole rationale in the header, instead of a design spread over several files.
 
-Editing 003 to add `owner_phone` means the local database (and, at the first real deploy, the
+> **The window is now closed.** Once the database is created from these seven migrations, the
+> normal rule is back: add a new numbered `.sql` file, never edit an applied one.
+
+Editing 001 for Module 5 means the local database (and, at the first real deploy, the
 Railway one too) must be dropped and recreated, not migrated — see the cost below. After
 recreating, set the pilot's number by hand (no UI exists yet):
 
@@ -294,8 +384,8 @@ The cost, in two parts:
   hard requirement, not a style. A rename also strands the old version string in
   `schema_migrations`; delete it by hand.
 
-Once the first real deploy exists this reverts to the normal rule: add a new numbered `.sql`
-file; never edit an applied one.
+With the database created from 001–007 this reverts to the normal rule: add a new numbered
+`.sql` file; never edit an applied one.
 
 ### Two-Layer System Prompt (Module 3)
 
@@ -310,8 +400,10 @@ file; never edit an applied one.
   name, attendant name, tone, business info, flow emphasis. **Untrusted input** — framed as
   data, injected only at fixed points, never allowed to rewrite the prompt. Edited by SQL (no UI).
 
-`build_system_prompt(config, slots, active_bookings)` assembles protected + customizable +
-available slots + the lead's active bookings. `get_cached_slots()` caches
+`build_system_prompt(config, slots, active_bookings, resume_note=False)` assembles protected +
+customizable + available slots + the lead's active bookings. With `resume_note=True` it also
+appends `RESUME_NOTE` **inside the protected region**, where the untrusted tenant config can
+never reach it — see Operator Inbox. `get_cached_slots()` caches
 `scheduling.get_available_slots()` for ~60s **per gunicorn worker** (a stale slot is safe — the
 Module 2 advisory lock is the real arbiter, and a filled slot returns `"full"`), and turns the
 integration exceptions into an empty list so a disconnected calendar never breaks the chat.
@@ -325,14 +417,59 @@ A password-protected web dashboard is available at `/dashboard/menu`. Routes are
 |---|---|---|
 | `/dashboard/login` | GET/POST | Password login form |
 | `/dashboard/logout` | GET | Clears session, redirects to login |
-| `/dashboard/menu` | GET | Post-login navigation hub (integrations, future features) |
+| `/dashboard/menu` | GET | Post-login navigation hub (inbox, integrations, future features) |
+| `/dashboard/inbox` | GET | Conversation list — paused and unread first |
+| `/dashboard/inbox/conversations` | GET | Partial of the list, HTMX polling target |
+| `/dashboard/inbox/<sender>` | GET | One conversation; marks the lead's messages read |
+| `/dashboard/inbox/<sender>/messages` | GET | Partial of the messages, HTMX polling target |
+| `/dashboard/inbox/<sender>/reply` | POST | Operator's reply — sends, then records |
+| `/dashboard/inbox/<sender>/resume` | POST | Hands the conversation back to the AI |
+
+Every route above is behind `@_require_auth`. The four per-sender ones `404` on a number with
+no session (`session.session_exists()`), so a hand-typed URL cannot mint a phantom conversation.
 
 `GET /` (in `webhook_bp`) simply redirects to `dashboard.menu` — there is no separate landing
 page. Login redirects to the menu too, so the menu is the single entry point to the UI.
 
-**The dashboard currently has no data screen.** Its only one was the order list, removed with
-the `orders` feature; the menu links to the Google Calendar integration page and nothing else.
-A `trial_bookings` screen (so the owner can confirm trial classes) belongs to a later module.
+**The dashboard's data screen is the inbox** (Module 5) — the first one since the order list
+went away with the `orders` feature. A `trial_bookings` screen (so the owner can confirm trial
+classes) is still a later module.
+
+### Operator Inbox (Module 5)
+
+The inbox is where a human takes a conversation over and gives it back. Replies go out through
+the gym's own Twilio number, so the lead sees one continuous thread and never learns whether a
+human or the AI answered.
+
+**`is_paused` is the whole control surface.** There is no second status column: paused means a
+human holds the conversation, and the AI stays silent. Before Module 5 nothing ever cleared it —
+a handoff paused a lead permanently. `inbox_resume` is the only exit.
+
+**Handing back (`inbox_resume`)** does three things: clears `is_paused`, resets `stage` to
+`interest`, and sets `needs_resume_note`. The stage is reused, not invented, on purpose — the
+stage list exists in **two** places that must agree, the `session.valid_stages` set **and** the
+milestone list inside `PROTECTED_LAYER`. Adding a value to only the set would hand the model a
+stage it has never seen described.
+
+**The resume note exists because the operator is invisible to the model.** Operator messages
+reach it with role `assistant`, indistinguishable from its own turns, so without being told it
+reads a takeover as its own history and typically re-introduces itself to a lead already deep in
+the funnel. The note (`ai_context.RESUME_NOTE`) rides on exactly one turn: the handler reads
+`needs_resume_note` and clears it in the same pass.
+
+**Reply order is inverted on purpose — send FIRST, record only on success.** The AI route does
+the opposite (record, then send). The operator is a person watching the screen who can resend
+immediately, and the record has to reflect what the lead actually received: recording first
+would leave a phantom message that the AI's next turn replays as something it said. A send
+failure answers **200** with a warning inside the HTML, never a bare 500 — HTMX does not swap
+content on 4xx/5xx, so a 500 would leave the operator staring at a mute screen. The reply box is
+cleared by an `HX-Trigger: reply-sent` header the route only sends on success, so a failure
+leaves the text right where the operator needs it.
+
+**PII:** nothing in this path logs message content — only `sender`, `author` and counts. The
+repository is public and these rows are whole conversations.
+
+Testing roteiro: `src/tests/test_inbox/INBOX_TESTING.md`.
 
 ### Google Calendar Integration
 
@@ -368,15 +505,27 @@ src/static/
 │   ├── theme.css         ← CSS variables, dark mode override, .theme-toggle button
 │   ├── login.css         ← login card + form styles
 │   ├── menu.css          ← post-login navigation hub
-│   └── integrations.css  ← Google Calendar connection status page
+│   ├── integrations.css  ← Google Calendar connection status page
+│   ├── inbox.css         ← inbox conversation list
+│   └── conversation.css  ← one conversation + reply box
 └── js/
     └── theme.js          ← shared dark/light theme toggle (all pages)
 ```
 
-Every stylesheet is paired with exactly one template in `src/templates/`
-(`login.html`, `menu.html`, `integrations_google.html`), all of which are
-rendered by a route. Deleting a template means deleting its stylesheet too — that is why
-removing the order list took `dashboard.html` and `dashboard.css` with it.
+Every stylesheet is paired with exactly one **page** template in `src/templates/`
+(`login.html`, `menu.html`, `integrations_google.html`, `inbox.html`, `conversation.html`), all
+of which are rendered by a route. Deleting a template means deleting its stylesheet too — that
+is why removing the order list took `dashboard.html` and `dashboard.css` with it.
+
+Templates whose name starts with `_` are **HTMX partials** (`_inbox_list.html`,
+`_conversation_messages.html`) and get no stylesheet of their own: they are rendered both
+inside their parent page (via `{% include %}` on first load) and alone by the polling route,
+so they inherit the parent's CSS and must never carry `<html>`/`<head>`.
+
+**HTMX is loaded from a CDN** (`unpkg.com/htmx.org@2.0.4`) in the two inbox pages. There is no
+build pipeline and no bundler in this project, deliberately — a script tag is the whole setup.
+Polling is `hx-trigger="every 5s"`, and each page swaps only its partial so the head, the theme
+and the toggle button are never reloaded.
 
 Theme preference is persisted in `localStorage` and falls back to the OS `prefers-color-scheme` setting.
 
@@ -421,24 +570,36 @@ Defined in `src/.env` and loaded via `config.py`:
   (`jobs/drain_notifications.py`) drains and delivers it via WhatsApp with retries. The owner's
   `1`/`2` reply is routed by `webhook/routes.py::receive_twilio_owner()` and recorded via
   `register_owner_response()`. See `src/tests/test_owner_notifications/OWNER_NOTIFICATIONS_TESTING.md`.
-- **Future** — an inbox/takeover screen in the dashboard, and un-pausing a session after a
-  handoff (today `is_paused` only ever gets set, never cleared) and actually closing out a
-  booking (`trial_bookings.status`) based on the owner's recorded response.
+- **Module 5 (done)** — Operator inbox with takeover (`bot/messages.py`, the `dashboard_bp`
+  inbox routes, `inbox.html` / `conversation.html`). `messages` becomes the single source of
+  truth for a conversation and `sessions.history` is retired; the LLM payload is a window over
+  it. A paused conversation still records what the lead says, the operator answers from the
+  dashboard through the gym's own number, and **the handoff is finally reversible** —
+  `inbox_resume` clears `is_paused`, resets the stage and arms the resume note. First dynamic
+  screen in the project (HTMX + polling). See `src/tests/test_inbox/INBOX_TESTING.md`.
+- **Future** — a `trial_bookings` screen so the owner can confirm a trial class, and actually
+  closing out a booking (`trial_bookings.status`) based on the owner's recorded response.
 
 ## Known Issues / TODOs
 
-- **The dashboard has no data screen** since the `orders` removal — only login, logout and a
-  menu pointing at the Google Calendar page. The screen that replaces it (a `trial_bookings`
-  list so the owner can confirm trial classes) is still future work.
+- **The inbox has no pagination and no search.** `list_conversations()` returns every session
+  and `get_conversation()` every message, both uncapped. Fine for a pilot with one gym; the
+  first busy tenant will need a limit.
+- **Polling, not push.** The inbox refreshes on a 5s timer (Module 5, decision 5B), so a new
+  message takes up to 5s to appear and every open tab costs two requests per cycle. Websockets
+  or SSE would be the upgrade, at the cost of the "no build pipeline" simplicity.
+- **The operator inbox is single-user.** Authentication is the one shared
+  `DASHBOARD_PASSWORD`, so `author = 'operator'` cannot say *which* human replied, and nothing
+  stops two operators from answering the same lead at once.
 - **Owner notifications are at-least-once, not exactly-once.** `jobs/drain_notifications.py`
   retries a failed send every cron cycle (bounded by `MAX_ATTEMPTS = 5`) with no advisory lock —
   Railway's cron already skips overlapping runs, so a second lock would be redundant, not
   additive safety. A notification that hits the cap sits as `status = 'failed'` with no
   automatic escalation yet.
 - **The owner's `1`/`2` reply is recorded, not acted on.** `register_owner_response()` only sets
-  `owner_notifications.owner_response`; nothing yet flips `trial_bookings.status` based on it,
-  and un-pausing a session after a handoff (`sessions.is_paused`) is also still unimplemented —
-  both are future work.
+  `owner_notifications.owner_response`; nothing yet flips `trial_bookings.status` based on it.
+  (Un-pausing after a handoff **is** implemented since Module 5 — that is what the inbox's
+  "Devolver para a IA" button does.)
 - `products` (migration 002) is grocery-store legacy with no reader inside `src/` — only
   `sync_agent/` uses it. It survives the rebrand for that reason alone.
 - `sync_agent/schedule/README.md` still documents the pre-rebrand names: the `mercadinho_dev`
@@ -449,7 +610,8 @@ Defined in `src/.env` and loaded via `config.py`:
   dashboard funnel to distort yet.
 - Dead code still present: the commented-out Meta `receive()` route in `webhook/routes.py`.
   (`bot/session.py::clear_session()` is live — its one call site is the Module 3 test CLI's
-  `reset` command, `src/tests/test_ai_action/test_ai_action.py`.)
+  `reset` command, `src/tests/test_ai_action/test_ai_action.py`. Since Module 5 it also wipes
+  the lead's `messages`, via `ON DELETE CASCADE`.)
 - `VERIFY_TOKEN` and `GET /webhook` exist only for the Meta Cloud API, which is not in use.
 - `sync_agent/schedule/sync_agent.log` is committed to git — a runtime log file that shouldn't be tracked.
 - `integrations/routes.py::google_callback` is guarded by `@_require_auth`. If the dashboard session expires between `/connect` and `/callback` (two separate HTTP requests), Google's `code` is lost on the redirect to login. Rare in practice, but real.

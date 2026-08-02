@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Corujai — Inbox</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/theme.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/inbox.css') }}">
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+</head>
+<body>
+    <button class="theme-toggle" id="themeBtn" onclick="toggleTheme()">🌙 Escuro</button>
+    <div class="card">
+        <a class="back-link" href="{{ url_for('dashboard.menu') }}">← Menu</a>
+        <h1>Inbox</h1>
+        <p class="subtitle">
+            Conversas pausadas e com mensagens não lidas aparecem primeiro.
+            A lista se atualiza sozinha a cada {{ poll_seconds }}s.
+        </p>
+
+        {#
+          Só esta div é trocada pelo polling. O <head>, o tema e o script ficam
+          de fora, então o refresh não recarrega a página inteira nem faz o
+          botão de tema piscar a cada ciclo.
+        #}
+        <div id="conversation-list"
+             hx-get="{{ url_for('dashboard.inbox_conversations') }}"
+             hx-trigger="every {{ poll_seconds }}s"
+             hx-swap="innerHTML">
+            {% include "_inbox_list.html" %}
+        </div>
+    </div>
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+</body>
+</html>

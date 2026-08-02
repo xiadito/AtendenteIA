@@ -11,7 +11,8 @@ The system prompt is built in two layers every turn:
 
 build_system_prompt() also injects the currently available slots (cached ~60s)
 and the lead's active bookings, so the model can only ever offer real times and
-always knows what the lead already has scheduled.
+always knows what the lead already has scheduled. When the operator hands a
+conversation back after a takeover it additionally injects RESUME_NOTE, once.
 """
 
 import logging
@@ -155,6 +156,33 @@ Human handoff request:
 </corujai_action>
 """
 
+# --- Resume note (operator takeover hand-back) -----------------------------
+# Injected for exactly ONE turn, when the operator gives a conversation back to
+# the AI from the dashboard inbox. Without it the model would read the
+# operator's messages as its own earlier turns (they arrive with role
+# "assistant") and have no idea a human had been driving — the usual failure
+# being a fresh self-introduction to a lead who is already deep in the funnel.
+#
+# The lead-facing instructions inside are in Portuguese because they describe
+# what to WRITE; the framing around them is English like the rest of the layer.
+# sessions.needs_resume_note is cleared in the same pass that reads it, so this
+# never leaks into later turns.
+RESUME_NOTE: str = """CONVERSATION HANDED BACK TO YOU
+A human attendant took over this conversation and has just handed it back to
+you. Everything in the recent history marked as your own messages may have been
+written by that person — treat it as said by "you", the same attendant, because
+that is how the lead experienced it.
+
+Pick the conversation up naturally from where it stands:
+- Do NOT introduce yourself again and do NOT greet the lead as if this were a
+  first contact.
+- Do NOT repeat the 1-hour timeout notice; it was already given.
+- Do NOT mention the handover, the human attendant, or that anything changed.
+- Read the recent messages, work out what was already agreed or asked, and
+  continue toward booking the free trial class from that point.
+"""
+
+
 # --- Slot cache ------------------------------------------------------------
 # Injecting slots every message would otherwise mean one Google HTTP call plus N
 # Postgres counts per turn. A ~60s window of stale data is acceptable because
@@ -286,6 +314,7 @@ def build_system_prompt(
     config: dict[str, Any],
     slots: list[dict],
     active_bookings: list[dict],
+    resume_note: bool = False,
 ) -> str:
     """Assemble the full system prompt: protected + customizable + slots + bookings.
 
@@ -293,12 +322,18 @@ def build_system_prompt(
         config (dict[str, Any]): Per-tenant config from bot.ai_configs.get_ai_config().
         slots (list[dict]): Available slots from get_cached_slots().
         active_bookings (list[dict]): The lead's active bookings.
+        resume_note (bool): True on the single turn right after the operator
+            hands a conversation back from the inbox. Appends RESUME_NOTE inside
+            the protected region, where the untrusted tenant config can never
+            reach it.
 
     Returns:
         str: The complete system prompt for one turn.
     """
+    protected = f"{PROTECTED_LAYER}\n\n{RESUME_NOTE}" if resume_note else PROTECTED_LAYER
+
     return (
-        f"{PROTECTED_LAYER}\n\n"
+        f"{protected}\n\n"
         f"{_render_customizable(config)}\n\n"
         f"{_render_slots(slots)}\n\n"
         f"{_render_active_bookings(active_bookings)}\n"

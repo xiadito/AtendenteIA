@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Corujai — Conversa</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/theme.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/conversation.css') }}">
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+</head>
+<body>
+    <button class="theme-toggle" id="themeBtn" onclick="toggleTheme()">🌙 Escuro</button>
+    <div class="card">
+        <a class="back-link" href="{{ url_for('dashboard.inbox') }}">← Inbox</a>
+
+        <header class="conversation-header">
+            <div>
+                <h1>{{ state.lead_name or sender }}</h1>
+                <p class="subtitle">
+                    {{ sender }} · {{ state.stage }}
+                    {% if state.child_name %} · criança: {{ state.child_name }}{% endif %}
+                </p>
+            </div>
+
+            {% if state.is_paused %}
+                {#
+                  Só aparece quando a conversa está pausada, porque só aí há algo
+                  a devolver. Form POST comum: é uma ação de escrita única, não
+                  precisa de HTMX, e o redirect recarrega a tela já despausada.
+                #}
+                <form method="POST" action="{{ url_for('dashboard.inbox_resume', sender=sender) }}">
+                    <button type="submit" class="btn-resume">Devolver para a IA</button>
+                </form>
+            {% endif %}
+        </header>
+
+        {% if state.is_paused %}
+            <div class="takeover-banner">
+                Você está no controle desta conversa. A IA não responde este lead
+                até você devolver.
+            </div>
+        {% else %}
+            <div class="ai-banner">
+                A IA está atendendo este lead. Se você responder por aqui, ela
+                continua respondendo também.
+            </div>
+        {% endif %}
+
+        {# Só as mensagens são trocadas pelo polling e pelo envio da resposta. #}
+        <div id="conversation-messages"
+             hx-get="{{ url_for('dashboard.inbox_conversation_messages', sender=sender) }}"
+             hx-trigger="every {{ poll_seconds }}s"
+             hx-swap="innerHTML">
+            {% include "_conversation_messages.html" %}
+        </div>
+
+        {#
+          O campo só é limpo quando a rota devolve o header HX-Trigger:
+          reply-sent, o que ela só faz se o Twilio aceitou a mensagem. Uma falha
+          de envio volta 200 (o HTMX não troca conteúdo em 4xx/5xx), então
+          limpar sempre apagaria justamente o texto que o operador precisa para
+          reenviar.
+        #}
+        <form class="reply-form"
+              hx-post="{{ url_for('dashboard.inbox_reply', sender=sender) }}"
+              hx-target="#conversation-messages"
+              hx-swap="innerHTML"
+              hx-on:reply-sent="this.reset()">
+            <textarea name="text" rows="2" placeholder="Escreva sua resposta…" required></textarea>
+            <button type="submit">Enviar</button>
+        </form>
+    </div>
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+</body>
+</html>

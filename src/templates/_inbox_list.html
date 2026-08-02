@@ -1,0 +1,53 @@
+{#
+  Parcial da lista de conversas. Renderizada de duas formas:
+  - embutida em inbox.html na primeira carga (via {% include %});
+  - sozinha, pela rota dashboard.inbox_conversations, a cada ciclo do polling.
+
+  Por isso não tem <html>/<head>: o estilo vem do inbox.css da página-mãe.
+#}
+{% if not conversations %}
+    <p class="empty-state">Nenhuma conversa ainda. Assim que um lead escrever, ela aparece aqui.</p>
+{% else %}
+    <ul class="conversation-list">
+        {% for conversation in conversations %}
+            <li class="conversation-row {% if conversation.is_paused %}paused{% endif %}">
+                <a href="{{ url_for('dashboard.inbox_conversation', sender=conversation.sender) }}">
+                    <div class="row-top">
+                        <span class="row-name">
+                            {{ conversation.lead_name or conversation.sender }}
+                        </span>
+                        <span class="row-time">
+                            {% if conversation.last_created_at %}
+                                {{ conversation.last_created_at.strftime('%d/%m %H:%M') }}
+                            {% endif %}
+                        </span>
+                    </div>
+
+                    <div class="row-preview">
+                        {% if conversation.last_content %}
+                            {% if conversation.last_author == 'lead' %}
+                                {{ conversation.last_content | truncate(90) }}
+                            {% elif conversation.last_author == 'operator' %}
+                                <span class="preview-prefix">Você:</span> {{ conversation.last_content | truncate(84) }}
+                            {% else %}
+                                <span class="preview-prefix">IA:</span> {{ conversation.last_content | truncate(86) }}
+                            {% endif %}
+                        {% else %}
+                            <span class="preview-empty">(sem mensagens)</span>
+                        {% endif %}
+                    </div>
+
+                    <div class="row-tags">
+                        {% if conversation.is_paused %}
+                            <span class="tag tag-paused">⏸ Você assumiu</span>
+                        {% endif %}
+                        {% if conversation.unread_count %}
+                            <span class="tag tag-unread">{{ conversation.unread_count }} não lida{{ 's' if conversation.unread_count > 1 }}</span>
+                        {% endif %}
+                        <span class="tag tag-stage">{{ conversation.stage }}</span>
+                    </div>
+                </a>
+            </li>
+        {% endfor %}
+    </ul>
+{% endif %}
