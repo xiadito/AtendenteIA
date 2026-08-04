@@ -11,6 +11,7 @@ import bot.messages as messages
 import bot.owner_notifications as owner_notifications
 import bot.session as session_store
 import integrations.store as store
+from bot.scheduling import CLASS_TYPE_LABELS
 
 
 # Configura o sistema de logs para mostrar data/hora, nível e mensagem
@@ -418,3 +419,114 @@ def _conversation_messages_response(sender: str, error: str | None = None):
     )
     headers = {} if error else {"HX-Trigger": "reply-sent"}
     return html, 200, headers
+
+
+#
+# BOOKINGS REVIEW (Module 6)
+#
+# Where the OWNER decides whether a trial class actually happens. It is the
+# second of the two channels for that decision — the first is replying 1/2 to
+# the WhatsApp notification (receive_twilio_owner, above) — and both end up in
+# bot/confirmations.py::confirm_or_cancel_booking(). The rule of the module is
+# that no closing logic lives in these routes: they translate a click into a
+# call and a result into Portuguese, nothing more.
+#
+# Unlike the inbox, these screens don't poll. A booking arrives when the AI
+# closes one, not every few seconds, and the owner is here to act rather than to
+# watch. HTMX is used only so a Confirmar/Cancelar click swaps the list in place
+# instead of reloading the page.
+#
+
+
+def _bookings_context(notice: dict | None = None) -> dict:
+    """Monta o contexto da lista de agendamentos, sempre com os rótulos de aula.
+
+    Os três pontos que renderizam a lista precisam do mesmo par (linhas +
+    rótulos): esquecer `class_labels` em um deles imprimiria "CRIANCAS" cru na
+    tela do dono.
+
+    Args:
+        notice (dict | None): Aviso a exibir no topo, como
+            {"kind": "success|warning|error", "text": str}.
+
+    Returns:
+        dict: kwargs para render_template.
+    """
+    return {
+        "bookings": bookings.list_bookings_for_review(),
+        "class_labels": CLASS_TYPE_LABELS,
+        "notice": notice,
+    }
+
+
+@dashboard_bp.route("/bookings")
+@_require_auth
+def bookings_review():
+    """Lista os agendamentos, pendentes de confirmação no topo."""
+    return render_template("bookings.html", **_bookings_context())
+
+
+@dashboard_bp.route("/bookings/list")
+@_require_auth
+def bookings_list():
+    """Parcial da lista, para recarregar só ela.
+
+    Separada da página pelo mesmo motivo do inbox: o swap troca as linhas sem
+    recarregar o <head>, o tema e o script.
+    """
+    return render_template("_bookings_list.html", **_bookings_context())
+
+
+@dashboard_bp.route("/bookings/<booking_id>/confirm", methods=["POST"])
+@_require_auth
+def bookings_confirm(booking_id: str):
+    """Confirma um agendamento pelo painel."""
+    return _booking_decision_response(booking_id, "confirmed")
+
+
+@dashboard_bp.route("/bookings/<booking_id>/cancel", methods=["POST"])
+@_require_auth
+def bookings_cancel(booking_id: str):
+    """Cancela um agendamento pelo painel."""
+    return _booking_decision_response(booking_id, "cancelled")
+
+
+def _booking_decision_response(booking_id: str, decision: str):
+    """Aplica a decisão do dono pela coordenadora e redesenha a lista.
+
+    A regra de fechamento não mora aqui: esta função chama
+    confirmations.confirm_or_cancel_booking() e traduz o resultado. O guard de
+    transição vem junto — clicar duas vezes cai em "skipped" sem que a rota
+    precise checar nada.
+
+    Agir pelo painel também carimba o owner_response da notificação daquele
+    agendamento, quando existe uma em aberto. Sem isso, uma reserva resolvida na
+    tela ficaria para sempre "sem resposta" na fila, e as duas fontes contariam
+    histórias diferentes sobre o que o dono decidiu.
+
+    Sempre responde 200, como as rotas do inbox: o HTMX não faz swap em 4xx/5xx,
+    e um erro nu deixaria o dono olhando uma tela que não mudou sem saber por quê.
+
+    Args:
+        booking_id (str): Id do agendamento vindo da URL.
+        decision (str): "confirmed" ou "cancelled".
+
+    Returns:
+        tuple: (HTML da parcial, 200).
+    """
+    result = confirmations.confirm_or_cancel_booking(booking_id, decision)
+
+    if result["result"] == "not_found":
+        notice = {"kind": "error", "text": "Agendamento não encontrado. A lista foi atualizada."}
+    elif result["result"] == "skipped":
+        already = "confirmado" if result["status"] == "confirmed" else "cancelado"
+        notice = {"kind": "warning", "text": f"Este agendamento já estava {already}. Nada foi alterado."}
+    else:
+        owner_notifications.register_response_for_booking(booking_id, decision)
+        done = "confirmado" if decision == "confirmed" else "cancelado"
+        notice = {"kind": "success", "text": f"Agendamento {done}."}
+        if not result["lead_notified"]:
+            notice["kind"] = "warning"
+            notice["text"] += " Não consegui avisar o lead pelo WhatsApp — avise por outro canal."
+
+    return render_template("_bookings_list.html", **_bookings_context(notice)), 200
