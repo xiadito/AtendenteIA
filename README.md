@@ -82,8 +82,10 @@ TWILIO_SANDBOX_NUMBER="whatsapp:+14155238886"
 ```
 
 O prefixo `whatsapp:` em `TWILIO_SANDBOX_NUMBER` é obrigatório — é assim que a API do Twilio
-distingue o canal, e é o formato em que os números de lead chegam e são gravados no banco
-(`sessions.sender`, `messages.sender`).
+distingue o canal, e é o formato em que os números de lead **chegam** no webhook
+(`whatsapp:+5521999999999`). Eles não são gravados assim: `receive_twilio()` tira o prefixo antes
+de qualquer coisa, então `sessions.sender`, `messages.sender` e `trial_bookings.sender` guardam
+dígitos puros (`5521999999999`) — que é também o formato que `send_message()` espera de volta.
 
 `src/.env` está no [.gitignore](.gitignore) e o repositório é público: **nunca** comite o Auth
 Token. Se ele for parar em um commit, rotacione o token no Console — remover o commit não basta,

@@ -117,7 +117,7 @@ FROM sessions ORDER BY updated_at DESC;
 
 -- One conversation, in the order the inbox shows it (tie-break by id — see Session Storage)
 SELECT author, is_read, created_at, content
-FROM messages WHERE sender = 'whatsapp:+55...' ORDER BY created_at, id;
+FROM messages WHERE sender = '5521999999999' ORDER BY created_at, id;
 
 -- What the operator still has to read
 SELECT sender, COUNT(*) AS unread FROM messages
@@ -150,11 +150,11 @@ FROM owner_notifications ORDER BY created_at DESC;
 
 -- Un-pause a lead by hand. Normally the inbox's "Devolver para a IA" button does this, and it
 -- also resets the stage and arms the resume note — this bare UPDATE does neither.
-UPDATE sessions SET is_paused = FALSE WHERE sender = 'whatsapp:+55...';
+UPDATE sessions SET is_paused = FALSE WHERE sender = '5521999999999';
 
 -- Reset one lead to a fresh greeting without touching the others.
 -- CAREFUL: this deletes their messages too (ON DELETE CASCADE).
-DELETE FROM sessions WHERE sender = 'whatsapp:+55...';
+DELETE FROM sessions WHERE sender = '5521999999999';
 ```
 
 **Don't `TRUNCATE owners`** when clearing test data — it holds the Google Calendar tokens, and
