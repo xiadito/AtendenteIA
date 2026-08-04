@@ -201,6 +201,33 @@ def list_bookings_by_status(status: str) -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def list_bookings_for_review() -> list[dict]:
+    """List every booking for the owner's review screen, pending ones first.
+
+    Deliberately unfiltered and uncapped, like messages.get_conversation(): the
+    owner opening the screen wants to see what still needs a decision AND what
+    was already decided, without choosing a filter first. The ordering does the
+    triage instead — everything still in 'pending_confirmation' floats to the
+    top, and inside each group the earliest class comes first, so the trial that
+    happens tomorrow is answered before the one three weeks out.
+
+    Returns:
+        list[dict]: Every booking row, pending_confirmation first, then by
+        slot_start ascending.
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT * FROM trial_bookings
+                ORDER BY (status = 'pending_confirmation') DESC, slot_start
+                """
+            )
+            rows = cur.fetchall()
+
+    return [dict(row) for row in rows]
+
+
 def update_booking_status(booking_id: str, status: str) -> bool:
     """Update a booking's status.
 
