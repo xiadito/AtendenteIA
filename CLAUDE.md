@@ -69,16 +69,20 @@ python tests/test_owner_notifications/test_owner_notifications_suite.py
 
 # Module 5 — operator inbox and takeover (LLM and WhatsApp both stubbed; fully deterministic)
 python tests/test_inbox/test_inbox_suite.py
+
+# Module 6 — booking confirmation by the owner (WhatsApp stubbed; fully deterministic)
+python tests/test_confirmation/test_confirmation_suite.py
 ```
 
 Each suite prints a PASS/FAIL report and exits non-zero on failure; SKIPs don't fail the run.
 Each module also has a manual CLI (`test_scheduling.py`, `test_ai_action.py`,
-`test_owner_notifications.py`, `test_inbox.py`) and a testing roteiro
+`test_owner_notifications.py`, `test_inbox.py`, `test_confirmation.py`) and a testing roteiro
 (`SCHEDULING_ENGINE_TESTING.md`, `AI_ACTION_TESTING.md`, `OWNER_NOTIFICATIONS_TESTING.md`,
-`INBOX_TESTING.md`).
+`INBOX_TESTING.md`, `CONFIRMATION_TESTING.md`).
 
 Each suite owns a sender prefix so their teardowns can never collide: `5521000...` (scheduling),
-`5522000...` (AI action), `5523000...` (owner notifications), `5524000...` (inbox).
+`5522000...` (AI action), `5523000...` (owner notifications), `5524000...` (inbox),
+`5525000...` (confirmation).
 
 ### Inspecting the database with DBeaver
 
@@ -125,6 +129,17 @@ SELECT sender, stage, updated_at FROM sessions WHERE is_paused = TRUE;
 -- Bookings the AI closed, newest first
 SELECT sender, lead_name, child_name, class_type, slot_start, status
 FROM trial_bookings ORDER BY created_at DESC;
+
+-- What the owner still has to decide — the same ordering the /dashboard/bookings screen uses
+SELECT id, lead_name, child_name, class_type, slot_start, status
+FROM trial_bookings ORDER BY (status = 'pending_confirmation') DESC, slot_start;
+
+-- The two records of one decision side by side: what the owner replied (owner_response) vs.
+-- what became of the class (status). They should never disagree — see Booking Confirmation.
+SELECT b.id, b.lead_name, b.status, n.owner_response, n.sent_at
+FROM trial_bookings b
+LEFT JOIN owner_notifications n ON n.booking_id = b.id AND n.event_type = 'booking'
+ORDER BY b.slot_start DESC;
 
 -- Set the owner's WhatsApp number (plain digits, no "whatsapp:+") — no UI yet
 UPDATE owners SET owner_phone = '5521999999999' WHERE tenant_id = 'default';
@@ -199,6 +214,25 @@ Operator POST /dashboard/inbox/<sender>/resume
     → bot/session.py::save_session()  (is_paused=False, stage="interest", needs_resume_note=True)
 ```
 
+And a third way, the **owner** deciding whether a trial class actually happens (Module 6). It
+has two entrances and one exit — both channels converge on the same coordinator:
+
+```
+Owner replies "1"/"2" over WhatsApp        Owner clicks on the dashboard
+  → webhook/routes.py::receive_twilio_owner()   → webhook/routes.py::bookings_confirm/_cancel()
+    → owner_notifications.register_owner_response()  → _booking_decision_response()
+       (returns the stamped row: event_type, booking_id)
+                    ↓                                          ↓
+            bot/confirmations.py::confirm_or_cancel_booking(booking_id, decision)
+              1. guard: only from status 'pending_confirmation' (else "skipped")
+              2. bookings.update_booking_status()      ← the authoritative fact
+              3. notify the lead, in its own try/except that only logs
+                 → whatsapp_service.send_message() + messages.add_message(author="ai")
+                                                           ↓
+                                    (dashboard only) owner_notifications
+                                      .register_response_for_booking()
+```
+
 **Three roles, do not conflate them.** The **lead** writes over WhatsApp and is always routed to
 `handle_text_message()`, even while paused. The **owner** replies `1`/`2` to notifications over
 WhatsApp and is routed to `receive_twilio_owner()`. The **operator** works only from the
@@ -209,8 +243,15 @@ only enqueues a row in `owner_notifications` (isolated in its own `try/except` t
 the reply to the lead). A separate Railway cron service, `jobs/drain_notifications.py`, drains
 pending rows on its own schedule and does the actual WhatsApp send, with retries — see
 Deployment. When the owner replies `1`/`2` to a notification, `receive_twilio_owner()` records
-the response via `owner_notifications.register_owner_response()` only; it does not update
-`trial_bookings` — closing out the booking based on that reply is still a future feature.
+the response via `owner_notifications.register_owner_response()` — which since Module 6 returns
+the **stamped row** (`dict | None`, carrying `event_type` and `booking_id`) instead of a bare
+`bool` — and then hands a `booking` event to `bot/confirmations.py`, which closes the booking
+out. **Module 4's deferral is resolved**: the reply now reaches `trial_bookings.status`.
+
+`register_owner_response()` itself still only writes to `owner_notifications`; what changed is
+that its **caller** acts on the result. A `handoff` notification carries `booking_id = NULL` and
+stays recorded-only — the `event_type` check in `receive_twilio_owner()` is what keeps
+`update_booking_status(None, ...)` from ever being reachable.
 
 ### AI-Driven Conversation (Module 3)
 
@@ -424,16 +465,25 @@ A password-protected web dashboard is available at `/dashboard/menu`. Routes are
 | `/dashboard/inbox/<sender>/messages` | GET | Partial of the messages, HTMX polling target |
 | `/dashboard/inbox/<sender>/reply` | POST | Operator's reply — sends, then records |
 | `/dashboard/inbox/<sender>/resume` | POST | Hands the conversation back to the AI |
+| `/dashboard/bookings` | GET | Booking list — pending confirmation first, then by `slot_start` |
+| `/dashboard/bookings/list` | GET | Partial of the list, target of the decision swap |
+| `/dashboard/bookings/<booking_id>/confirm` | POST | Confirms a trial class |
+| `/dashboard/bookings/<booking_id>/cancel` | POST | Cancels a trial class |
 
 Every route above is behind `@_require_auth`. The four per-sender ones `404` on a number with
 no session (`session.session_exists()`), so a hand-typed URL cannot mint a phantom conversation.
+The two booking POSTs need no such guard: `bookings.get_booking()` returns `None` rather than
+creating, so an unknown id is answered with a Portuguese notice inside the list.
 
 `GET /` (in `webhook_bp`) simply redirects to `dashboard.menu` — there is no separate landing
 page. Login redirects to the menu too, so the menu is the single entry point to the UI.
 
-**The dashboard's data screen is the inbox** (Module 5) — the first one since the order list
-went away with the `orders` feature. A `trial_bookings` screen (so the owner can confirm trial
-classes) is still a later module.
+**The dashboard has two data screens**: the inbox (Module 5) and the bookings review (Module 6),
+the first ones since the order list went away with the `orders` feature.
+
+**Trap:** the bookings page endpoint is `dashboard.bookings_review`, not `dashboard.bookings`.
+`routes.py` does `import bot.bookings as bookings` at the top, and a view function named
+`bookings` would shadow the module for every route in the file.
 
 ### Operator Inbox (Module 5)
 
@@ -471,6 +521,45 @@ repository is public and these rows are whole conversations.
 
 Testing roteiro: `src/tests/test_inbox/INBOX_TESTING.md`.
 
+### Booking Confirmation (Module 6)
+
+The last piece of the core: the owner decides whether a booked trial class actually happens, and
+the lead is told either way. It closes the loop lead → AI → booking → notification → takeover →
+**confirmation**.
+
+**`bot/confirmations.py` is the single source of the closing rule.** The owner can decide in two
+places — replying `1`/`2` to the WhatsApp notification, or clicking on `/dashboard/bookings` —
+and both call `confirm_or_cancel_booking(booking_id, decision)`. Nothing about closing a booking
+lives in the routes; they translate a click into a call and a result into Portuguese. That is
+also why the transition guard lives in the coordinator and not in each channel: written twice, it
+would eventually be right in only one of them.
+
+**Guard: only `pending_confirmation` can be decided.** Anything else returns
+`{"result": "skipped", "status": ...}` without writing or notifying. This one check is what makes
+both duplicates harmless — the owner replying `1` twice (the second reply finds no open
+notification and `register_owner_response()` returns `None`) and the owner double-clicking the
+button (the second click finds a booking that is no longer pending). The UI hides the buttons on
+a decided booking, but that is convenience, not the gate.
+
+**Order: status first, lead second.** `update_booking_status()` is the authoritative fact; the
+WhatsApp notice is a courtesy on top of it, isolated in a `try/except` that only logs.
+`send_message()` re-raises, and a Twilio blip must neither roll the status back nor escape into
+the owner's webhook — an exception there would make Twilio retry the owner's `1`. The return
+value carries `lead_notified` so the dashboard can warn the owner to reach the lead another way.
+The notice is one message: it never calls the AI, and it never unpauses a conversation — a lead
+being handled by a human still deserves to hear their class was confirmed.
+
+**Cancelling frees the seat with no Calendar call.** `get_available_slots()` sizes a slot with
+`bookings.count_active_bookings()`, which counts `status != 'cancelled'`, so flipping the row is
+the whole release. See Known Issues for the cosmetic debt this leaves behind.
+
+**Two records, two questions.** `owner_notifications.owner_response` answers "what did the owner
+reply?"; `trial_bookings.status` answers "what became of the class?". Deciding from the dashboard
+writes both (`register_response_for_booking()`), so a booking resolved on screen doesn't sit in
+the queue as unanswered forever.
+
+Testing roteiro: `src/tests/test_confirmation/CONFIRMATION_TESTING.md`.
+
 ### Google Calendar Integration
 
 `integrations/` implements OAuth 2.0 onboarding for Google Calendar (Module 1). Routes are
@@ -507,7 +596,8 @@ src/static/
 │   ├── menu.css          ← post-login navigation hub
 │   ├── integrations.css  ← Google Calendar connection status page
 │   ├── inbox.css         ← inbox conversation list
-│   └── conversation.css  ← one conversation + reply box
+│   ├── conversation.css  ← one conversation + reply box
+│   └── bookings.css      ← bookings review list + decision buttons
 └── js/
     └── theme.js          ← shared dark/light theme toggle (all pages)
 ```
@@ -569,7 +659,8 @@ Defined in `src/.env` and loaded via `config.py`:
   `owner_notifications` (`bot/owner_notifications.py`); a separate Railway cron service
   (`jobs/drain_notifications.py`) drains and delivers it via WhatsApp with retries. The owner's
   `1`/`2` reply is routed by `webhook/routes.py::receive_twilio_owner()` and recorded via
-  `register_owner_response()`. See `src/tests/test_owner_notifications/OWNER_NOTIFICATIONS_TESTING.md`.
+  `register_owner_response()` — which, since Module 6, also closes the booking out. See
+  `src/tests/test_owner_notifications/OWNER_NOTIFICATIONS_TESTING.md`.
 - **Module 5 (done)** — Operator inbox with takeover (`bot/messages.py`, the `dashboard_bp`
   inbox routes, `inbox.html` / `conversation.html`). `messages` becomes the single source of
   truth for a conversation and `sessions.history` is retired; the LLM payload is a window over
@@ -577,14 +668,23 @@ Defined in `src/.env` and loaded via `config.py`:
   dashboard through the gym's own number, and **the handoff is finally reversible** —
   `inbox_resume` clears `is_paused`, resets the stage and arms the resume note. First dynamic
   screen in the project (HTMX + polling). See `src/tests/test_inbox/INBOX_TESTING.md`.
-- **Future** — a `trial_bookings` screen so the owner can confirm a trial class, and actually
-  closing out a booking (`trial_bookings.status`) based on the owner's recorded response.
+- **Module 6 (done)** — Booking confirmation by the owner (`bot/confirmations.py`, the
+  `dashboard_bp` bookings routes, `bookings.html`). The owner's `1`/`2` finally reaches
+  `trial_bookings.status`, and the same decision is available as a button on the dashboard —
+  both channels go through one coordinator, which guards the transition and tells the lead the
+  outcome. Cancelling frees the seat through `count_active_bookings()` alone. **With it the core
+  is complete**: lead → AI → booking → notification → takeover → confirmation. See
+  `src/tests/test_confirmation/CONFIRMATION_TESTING.md`.
+- **Future** — beyond the core: reminders before the class, a funnel/metrics screen, multi-tenant
+  onboarding (every tenant is still hardcoded to `default`), and a real user model so the
+  dashboard stops being single-password.
 
 ## Known Issues / TODOs
 
-- **The inbox has no pagination and no search.** `list_conversations()` returns every session
-  and `get_conversation()` every message, both uncapped. Fine for a pilot with one gym; the
-  first busy tenant will need a limit.
+- **Neither data screen paginates or searches.** `list_conversations()` returns every session,
+  `get_conversation()` every message, and `list_bookings_for_review()` every booking ever made —
+  all uncapped. Fine for a pilot with one gym; the first busy tenant will need a limit, and the
+  bookings screen will need a date filter before it grows past a scroll.
 - **Polling, not push.** The inbox refreshes on a 5s timer (Module 5, decision 5B), so a new
   message takes up to 5s to appear and every open tab costs two requests per cycle. Websockets
   or SSE would be the upgrade, at the cost of the "no build pipeline" simplicity.
@@ -596,10 +696,18 @@ Defined in `src/.env` and loaded via `config.py`:
   Railway's cron already skips overlapping runs, so a second lock would be redundant, not
   additive safety. A notification that hits the cap sits as `status = 'failed'` with no
   automatic escalation yet.
-- **The owner's `1`/`2` reply is recorded, not acted on.** `register_owner_response()` only sets
-  `owner_notifications.owner_response`; nothing yet flips `trial_bookings.status` based on it.
-  (Un-pausing after a handoff **is** implemented since Module 5 — that is what the inbox's
-  "Devolver para a IA" button does.)
+- **A cancelled booking leaves a stale line on the Calendar event.** Module 6, decision 1A:
+  cancelling only flips `trial_bookings.status`, because that is all
+  `count_active_bookings()` reads and therefore all it takes to free the seat. The event's
+  description still lists the cancelled student under `--- Reservas Corujai ---`. **Cosmetic** —
+  the seat is genuinely available and will be re-offered — but an owner reading the calendar
+  directly sees a name that no longer counts. Patching the event on cancel would mean a Calendar
+  round-trip that can fail after the status is already committed, which is the trade that was
+  refused.
+- **The lead notice on a decision is fire-and-forget.** `confirmations._notify_lead()` swallows a
+  send failure into a log and `lead_notified: False`; there is no retry and no queue (unlike the
+  owner notifications, which have a cron). The dashboard warns the owner to reach the lead
+  another way; the WhatsApp channel has nowhere to show that warning at all.
 - `products` (migration 002) is grocery-store legacy with no reader inside `src/` — only
   `sync_agent/` uses it. It survives the rebrand for that reason alone.
 - `sync_agent/schedule/README.md` still documents the pre-rebrand names: the `mercadinho_dev`
