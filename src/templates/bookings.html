@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Corujai — Agendamentos</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/theme.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/bookings.css') }}">
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+</head>
+<body>
+    <button class="theme-toggle" id="themeBtn" onclick="toggleTheme()">🌙 Escuro</button>
+    <div class="card">
+        <a class="back-link" href="{{ url_for('dashboard.menu') }}">← Menu</a>
+        <h1>Agendamentos</h1>
+        <p class="subtitle">
+            As aulas experimentais que ainda esperam sua confirmação aparecem
+            primeiro. Confirmar ou cancelar por aqui é o mesmo que responder
+            <strong>1</strong> ou <strong>2</strong> na notificação do WhatsApp.
+        </p>
+
+        {#
+          Só esta div é trocada quando o dono decide um agendamento. Diferente do
+          inbox, não há polling por tempo: um agendamento chega quando a IA fecha
+          um, não a cada poucos segundos, e o dono está aqui para agir, não para
+          assistir. O HTMX serve só para o clique trocar a lista sem recarregar a
+          página inteira.
+        #}
+        <div id="bookings-list">
+            {% include "_bookings_list.html" %}
+        </div>
+    </div>
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+</body>
+</html>
