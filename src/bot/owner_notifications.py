@@ -7,9 +7,14 @@ drains pending rows on its own schedule, sends the WhatsApp message, and
 retries up to a cap. This keeps a slow or failing Twilio call from ever
 blocking the reply to the lead.
 
-register_owner_response() only ever writes owner_response on this table. It
-never touches trial_bookings — closing out the booking based on the owner's
-reply is a future feature, not this one.
+The functions here only ever write to owner_notifications — none of them
+touches trial_bookings. What changed in Module 6 is who acts on the result:
+register_owner_response() now RETURNS the stamped row (event_type, booking_id)
+instead of a bare bool, and its caller (webhook/routes.py) hands a 'booking'
+row to bot/confirmations.py, which is the single place that closes a booking
+out. Keeping the write here and the decision there is what lets the dashboard
+close a booking through the same coordinator without going through WhatsApp at
+all.
 """
 
 import logging
@@ -175,20 +180,28 @@ def mark_attempt_failed(notification_id: int, max_attempts: int) -> None:
         logger.warning("Notification %s attempt failed; will retry next cron cycle.", notification_id)
 
 
-def register_owner_response(owner_phone: str, response: str) -> bool:
+def register_owner_response(owner_phone: str, response: str) -> dict | None:
     """Record the owner's reply on the most recent open notification.
 
-    Finds the latest 'sent' notification for this owner_phone still missing
-    an owner_response and stamps it. Never touches trial_bookings — closing
-    out the booking based on this response belongs to a future feature.
+    Finds the latest 'sent' notification for this owner_phone still missing an
+    owner_response and stamps it. This function itself still only writes to
+    owner_notifications; what it now does is hand the caller enough of the row
+    to act on it — event_type says whether a booking is even involved, and
+    booking_id says which one. Closing the booking out is the caller's job
+    (webhook/routes.py -> bot/confirmations.py), so that the dashboard can close
+    the same booking through the same coordinator.
+
+    Returning the row is also what makes a double reply harmless: the second "1"
+    finds no open notification, gets None, and there is nothing left to do.
 
     Args:
         owner_phone (str): The owner's number the reply came from.
         response (str): One of valid_owner_responses.
 
     Returns:
-        bool: True if an open notification was found and updated, False if
-        there was nothing pending a response (e.g. the owner replied twice).
+        dict | None: The stamped row as {"id", "event_type", "booking_id"}, or
+        None if there was nothing pending a response (e.g. the owner replied
+        twice). booking_id is None on 'handoff' notifications.
 
     Raises:
         ValueError: If response is not one of valid_owner_responses.
@@ -208,16 +221,69 @@ def register_owner_response(owner_phone: str, response: str) -> bool:
                     ORDER BY sent_at DESC
                     LIMIT 1
                 )
+                RETURNING id, event_type, booking_id
                 """,
                 (response, owner_phone),
+            )
+            row = cur.fetchone()
+
+        conn.commit()
+
+    if row is None:
+        logger.warning("Owner %s responded '%s' but no open notification was found.", owner_phone, response)
+        return None
+
+    logger.info(
+        "Owner %s responded '%s' to notification %s (event_type=%s).",
+        owner_phone, response, row["id"], row["event_type"],
+    )
+    return dict(row)
+
+
+def register_response_for_booking(booking_id: str, response: str) -> bool:
+    """Stamp the owner_response of the notification tied to one booking.
+
+    The WhatsApp path stamps the notification and then closes the booking; the
+    dashboard path closes the booking directly, which would leave that same
+    notification open forever and the two records disagreeing about what the
+    owner decided. This is the dashboard's way of writing the same fact.
+
+    At most one row can match: the partial unique index
+    idx_owner_notifications_booking_unique allows a single 'booking'
+    notification per booking_id. A booking with no notification (the queue never
+    ran, or the owner has no phone configured) simply matches nothing.
+
+    Args:
+        booking_id (str): trial_bookings.id the decision was made about.
+        response (str): One of valid_owner_responses.
+
+    Returns:
+        bool: True if an open notification was found and stamped, False if there
+        was none (no notification for this booking, or already answered).
+
+    Raises:
+        ValueError: If response is not one of valid_owner_responses.
+    """
+    if response not in valid_owner_responses:
+        raise ValueError(f"Invalid owner response: {response}")
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE owner_notifications
+                SET owner_response = %s, updated_at = NOW()
+                WHERE booking_id = %s AND event_type = 'booking' AND owner_response IS NULL
+                """,
+                (response, booking_id),
             )
             updated: bool = cur.rowcount > 0
 
         conn.commit()
 
     if updated:
-        logger.info("Owner %s responded '%s' to the latest open notification.", owner_phone, response)
+        logger.info("Notification for booking %s stamped '%s' from the dashboard.", booking_id, response)
     else:
-        logger.warning("Owner %s responded '%s' but no open notification was found.", owner_phone, response)
+        logger.info("No open notification for booking %s to stamp; nothing to reconcile.", booking_id)
 
     return updated

@@ -38,9 +38,11 @@
 -- NULL for event_type = 'handoff', where there is no booking to reference.
 --
 -- register_owner_response() only ever writes owner_response here — it
--- deliberately never touches trial_bookings.status. Closing out the
--- booking itself based on the owner's reply is a future feature, not this
--- one.
+-- deliberately never touches trial_bookings.status. Since Module 6 its
+-- CALLER does: it returns the stamped row and webhook/routes.py hands a
+-- 'booking' row to bot/confirmations.py, the single place that closes a
+-- booking out. owner_response therefore records what the owner decided,
+-- while trial_bookings.status records what became of the class.
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS owner_notifications (

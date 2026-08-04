@@ -1,0 +1,63 @@
+{#
+  Parcial da lista de agendamentos. Renderizada de três formas:
+  - embutida em bookings.html na primeira carga (via {% include %});
+  - sozinha, pela rota dashboard.bookings_list;
+  - como resposta dos POSTs de confirmar/cancelar, com `notice` preenchido.
+
+  Por isso não tem <html>/<head>: o estilo vem do bookings.css da página-mãe.
+
+  Os botões só aparecem em 'pending_confirmation'. Isso é conveniência de tela,
+  não é a regra: quem impede uma decisão sobre um agendamento já resolvido é o
+  guard em bot/confirmations.py, que vale para o WhatsApp também.
+#}
+{% if notice %}
+    <div class="notice notice-{{ notice.kind }}">{{ notice.text }}</div>
+{% endif %}
+
+{% if not bookings %}
+    <p class="empty-state">Nenhum agendamento ainda. Quando a IA fechar uma aula experimental, ela aparece aqui.</p>
+{% else %}
+    <ul class="booking-list">
+        {% for booking in bookings %}
+            <li class="booking-row {% if booking.status == 'pending_confirmation' %}pending{% endif %}">
+                <div class="row-main">
+                    <div class="row-top">
+                        <span class="row-name">
+                            {% if booking.child_name %}
+                                {{ booking.child_name }}
+                                <span class="row-guardian">(resp.: {{ booking.lead_name }})</span>
+                            {% else %}
+                                {{ booking.lead_name }}
+                            {% endif %}
+                        </span>
+                        <span class="row-time">{{ booking.slot_start.strftime('%d/%m %H:%M') }}</span>
+                    </div>
+
+                    <div class="row-tags">
+                        <span class="tag tag-class">{{ class_labels.get(booking.class_type, booking.class_type) }}</span>
+                        {% if booking.status == 'pending_confirmation' %}
+                            <span class="tag status-pending">Aguardando você</span>
+                        {% elif booking.status == 'confirmed' %}
+                            <span class="tag status-confirmed">Confirmado</span>
+                        {% else %}
+                            <span class="tag status-cancelled">Cancelado</span>
+                        {% endif %}
+                    </div>
+                </div>
+
+                {% if booking.status == 'pending_confirmation' %}
+                    <div class="row-actions">
+                        <button class="btn-confirm"
+                                hx-post="{{ url_for('dashboard.bookings_confirm', booking_id=booking.id) }}"
+                                hx-target="#bookings-list"
+                                hx-swap="innerHTML">Confirmar</button>
+                        <button class="btn-cancel"
+                                hx-post="{{ url_for('dashboard.bookings_cancel', booking_id=booking.id) }}"
+                                hx-target="#bookings-list"
+                                hx-swap="innerHTML">Cancelar</button>
+                    </div>
+                {% endif %}
+            </li>
+        {% endfor %}
+    </ul>
+{% endif %}

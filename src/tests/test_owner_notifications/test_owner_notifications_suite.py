@@ -43,6 +43,7 @@ sys.path.insert(0, str(SRC_DIR))
 import bot.bookings as bookings  # noqa: E402
 import bot.owner_notifications as owner_notifications  # noqa: E402
 import bot.scheduling as scheduling  # noqa: E402
+import bot.session as session_store  # noqa: E402
 import integrations.store as store  # noqa: E402
 import jobs.drain_notifications as drain_notifications  # noqa: E402
 import webhook.routes as routes  # noqa: E402
@@ -401,8 +402,11 @@ class OwnerNotificationsSuite:
 
         notification_id = self._fetch_notification(sender, "handoff")["id"]
         owner_notifications.mark_sent(notification_id)
-        updated = owner_notifications.register_owner_response(OWNER_PHONE_TEST, "confirmed")
-        expect(updated, "register_owner_response deveria ter encontrado a notificação enviada")
+        # Desde o Módulo 6 o retorno é a linha carimbada (dict | None), não um bool.
+        stamped = owner_notifications.register_owner_response(OWNER_PHONE_TEST, "confirmed")
+        expect(stamped is not None, "register_owner_response deveria ter encontrado a notificação enviada")
+        expect_equal(stamped["event_type"], "handoff", "event_type devolvido")
+        expect(stamped["booking_id"] is None, "handoff não deveria carregar booking_id")
 
         allowed = owner_notifications.enqueue_notification(
             owner_id=self.owner_id, owner_phone=OWNER_PHONE_TEST,
@@ -464,8 +468,24 @@ class OwnerNotificationsSuite:
         return f"cron: {drain_notifications.MAX_ATTEMPTS} falhas consecutivas → status=failed"
 
     def test_06_register_owner_response_via_webhook(self) -> str:
-        # "1" → confirmed, on a booking notification: trial_bookings must stay untouched.
+        """As duas asserções invertidas pelo Módulo 6.
+
+        Até o Módulo 5 este teste afirmava que responder "1" NÃO tocava
+        trial_bookings e NÃO gerava nenhum envio. As duas coisas mudaram de
+        propósito: a resposta do dono agora fecha o agendamento e o lead é
+        avisado. A parte de handoff, logo abaixo, continua valendo exatamente
+        como antes — é ela que prova que booking_id NULL segue intocado.
+
+        O patch é duplo porque os dois envios saem por caminhos diferentes:
+        routes.py faz `from ... import send_message` (liga o nome no módulo de
+        destino), enquanto confirmations.py chama
+        `whatsapp_service.send_message` pelo módulo. Sem o segundo patch, o
+        aviso ao lead sairia de verdade pelo Twilio.
+        """
+        # "1" → confirmed, numa notificação de booking: agora FECHA o agendamento.
         sender = self.next_sender()
+        # O aviso ao lead grava em messages, que exige uma sessions row (FK).
+        session_store.get_session(sender)
         booking_id = self._create_booking(sender)
         owner_notifications.enqueue_notification(
             owner_id=self.owner_id, owner_phone=OWNER_PHONE_TEST,
@@ -473,17 +493,19 @@ class OwnerNotificationsSuite:
         )
         notification_id = self._fetch_notification(sender, "booking")["id"]
         owner_notifications.mark_sent(notification_id)
-        status_before = bookings.get_booking(booking_id)["status"]
+        expect_equal(bookings.get_booking(booking_id)["status"], "pending_confirmation",
+                     "pré-condição: a reserva começa pendente")
 
         send = SendCapture()
-        with patched(routes, "send_message", send):
+        with patched(routes, "send_message", send), patched(whatsapp_service, "send_message", send):
             routes.receive_twilio_owner(OWNER_PHONE_TEST, "1")
 
         row = self._fetch_notification_by_id(notification_id)
         expect_equal(row["owner_response"], "confirmed", "'1' deveria gravar 'confirmed'")
-        expect_equal(len(send.sent), 0, "uma resposta reconhecida não deveria gerar mensagem de volta")
-        expect_equal(bookings.get_booking(booking_id)["status"], status_before,
-                     "trial_bookings.status não deveria ter sido tocado")
+        expect_equal(bookings.get_booking(booking_id)["status"], "confirmed",
+                     "a resposta do dono deveria ter fechado o agendamento (Módulo 6)")
+        expect_equal(len(send.sent), 1, "o lead deveria ter sido avisado do desfecho")
+        expect_equal(send.sent[0][0], sender, "o aviso vai para o LEAD, não para o dono")
 
         # "2" → cancelled, on an independent handoff notification.
         sender2 = self.next_sender()
@@ -493,12 +515,13 @@ class OwnerNotificationsSuite:
         )
         notification_id2 = self._fetch_notification(sender2, "handoff")["id"]
         owner_notifications.mark_sent(notification_id2)
-        with patched(routes, "send_message", send):
+        with patched(routes, "send_message", send), patched(whatsapp_service, "send_message", send):
             routes.receive_twilio_owner(OWNER_PHONE_TEST, "2")
         row2 = self._fetch_notification_by_id(notification_id2)
         expect_equal(row2["owner_response"], "cancelled", "'2' deveria gravar 'cancelled'")
+        expect_equal(len(send.sent), 1, "handoff não tem agendamento: nada a avisar ao lead")
 
-        return "receive_twilio_owner: '1'→confirmed, '2'→cancelled, nunca toca trial_bookings"
+        return "receive_twilio_owner: '1' fecha a reserva e avisa o lead; handoff só registra"
 
     def test_07_get_owner_by_phone(self) -> str:
         found = store.get_owner_by_phone(OWNER_PHONE_TEST)
@@ -548,6 +571,11 @@ class OwnerNotificationsSuite:
                 removed_notifications = cur.rowcount
                 cur.execute("DELETE FROM trial_bookings WHERE sender LIKE %s", (SENDER_PREFIX + "%",))
                 removed_bookings = cur.rowcount
+                # Desde o Módulo 6 o teste 6 cria uma sessions row: o aviso ao
+                # lead grava em messages, que tem FK para sessions. As mensagens
+                # somem junto, por ON DELETE CASCADE.
+                cur.execute("DELETE FROM sessions WHERE sender LIKE %s", (SENDER_PREFIX + "%",))
+                removed_sessions = cur.rowcount
             conn.commit()
 
         if self._had_original_owner_phone:
@@ -555,8 +583,8 @@ class OwnerNotificationsSuite:
         OWNER_BACKUP_PATH.unlink(missing_ok=True)
 
         print(
-            f"  limpeza: {removed_notifications} notificação(ões) e {removed_bookings} reserva(s) de "
-            "teste removidas; owner_phone original restaurado."
+            f"  limpeza: {removed_notifications} notificação(ões), {removed_bookings} reserva(s) e "
+            f"{removed_sessions} sessão(ões) de teste removidas; owner_phone original restaurado."
         )
 
 
@@ -630,7 +658,7 @@ def main() -> None:
         ("4", "Cron: pending → sent no caminho feliz", suite.test_04_cron_happy_path_marks_sent),
         ("5", "Cron: falhas consecutivas → attempts e depois failed",
          suite.test_05_cron_failure_increments_attempts_then_fails),
-        ("6", "receive_twilio_owner: 1/2 gravam a resposta, sem tocar trial_bookings",
+        ("6", "receive_twilio_owner: 1 fecha a reserva e avisa o lead; handoff só registra",
          suite.test_06_register_owner_response_via_webhook),
         ("7", "get_owner_by_phone reconhece o dono e ignora número desconhecido",
          suite.test_07_get_owner_by_phone),
