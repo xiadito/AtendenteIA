@@ -5,6 +5,8 @@ import logging
 import threading
 from whatsapp.whatsapp_service import send_message
 from bot.handlers import handle_text_message
+import bot.bookings as bookings
+import bot.confirmations as confirmations
 import bot.messages as messages
 import bot.owner_notifications as owner_notifications
 import bot.session as session_store
@@ -165,9 +167,15 @@ def receive_twilio() -> tuple:
 def receive_twilio_owner(owner_phone: str, body: str) -> None:
     """Handle a WhatsApp reply from the gym owner (never a lead).
 
-    Maps "1"/"2" to confirmed/cancelled and records the response. Never
-    calls update_booking_status() — actually closing out the booking based
-    on this reply is a future feature, not this one.
+    Maps "1"/"2" to confirmed/cancelled, records the response, and — for a
+    'booking' notification — actually closes the booking out through
+    bot/confirmations.py. That last part is what Module 6 added; until then the
+    reply was only ever recorded on owner_notifications.
+
+    A 'handoff' notification carries no booking_id (there is no class to
+    decide), so it is recorded and nothing else happens. A reply with no open
+    notification returns None and there is nothing left to answer — which is
+    what makes a second "1" harmless.
 
     Args:
         owner_phone (str): The owner's number, already in clean_number form.
@@ -182,9 +190,14 @@ def receive_twilio_owner(owner_phone: str, body: str) -> None:
         send_message(owner_phone, "Não entendi. Responda 1 para confirmar ou 2 para cancelar.")
         return
 
-    updated = owner_notifications.register_owner_response(owner_phone, response)
-    if not updated:
+    row = owner_notifications.register_owner_response(owner_phone, response)
+    if row is None:
         logger.warning(f"Owner {owner_phone} replied '{stripped}' but no open notification was found.")
+        return
+
+    if row["event_type"] == "booking" and row["booking_id"]:
+        confirmations.confirm_or_cancel_booking(row["booking_id"], response)
+
 
 @webhook_bp.route("/", methods=["GET"])
 def initial_message():
