@@ -175,19 +175,26 @@ para de aparecer no drain seguinte.
 SELECT attempts, status FROM owner_notifications WHERE id = <id>;
 ```
 
-### 6. `register_owner_response`: `1`→`confirmed`, `2`→`cancelled`, nunca toca `trial_bookings`
+### 6. `register_owner_response`: `1`→`confirmed`, `2`→`cancelled` — e agora fecha a reserva
 
 **O que fazer:** com uma notificação `sent` pendente de resposta, simule a resposta do
 dono (CLI `reply --body 1` ou `--body 2`).
 
 **O que esperar:** `owner_response` é gravado na notificação `sent` mais recente sem
-resposta daquele `owner_phone`. **`trial_bookings.status` não muda** — fechar a reserva
-com base nessa resposta é uma feature futura.
+resposta daquele `owner_phone`, e a função devolve a linha carimbada (`dict | None`,
+com `event_type` e `booking_id`) em vez de um `bool`.
+
+**Mudou no Módulo 6:** numa notificação de **booking**, `trial_bookings.status` agora
+**muda** para `confirmed`/`cancelled` e o lead recebe um aviso por WhatsApp — quem faz
+isso é `bot/confirmations.py`, chamado por `receive_twilio_owner`. Numa notificação de
+**handoff** (`booking_id` NULL) nada disso acontece: a resposta é só registrada, como
+sempre foi. O roteiro completo desse fechamento está em
+`../test_confirmation/CONFIRMATION_TESTING.md`.
 
 **Como verificar:**
 ```sql
 SELECT owner_response FROM owner_notifications WHERE id = <id>;
-SELECT status FROM trial_bookings WHERE id = '<booking_id>';  -- inalterado
+SELECT status FROM trial_bookings WHERE id = '<booking_id>';  -- confirmed / cancelled
 ```
 
 ### 7. `get_owner_by_phone` reconhece o dono; número desconhecido segue como lead
