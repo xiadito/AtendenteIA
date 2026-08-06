@@ -96,12 +96,13 @@ def create_booking_with_lock(
         sender (str): Lead's WhatsApp number, e.g. "5521999999999".
         lead_name (str): Lead's name, as provided by the AI. For child classes
             this is the responsible adult who chats on WhatsApp.
-        class_type (str): One of scheduling.CLASS_CAPACITY's keys.
+        class_type (str): One of the tenant's class_types.marker values.
         slot_start (datetime): Timezone-aware start of the slot.
         slot_end (datetime): Timezone-aware end of the slot.
         capacity (int | None): Max active bookings for this event, or None for unlimited.
-        child_name (str | None): Name of the child attending, for [BABY]/[CRIANCAS]
-            classes. Stays NULL for adult classes (where it does not apply).
+        child_name (str | None): Name of the child attending, for class types
+            flagged requires_child_name. Stays NULL for the others (where it
+            does not apply).
         tenant_id (str): Tenant identifier. Fixed to DEFAULT_TENANT_ID for the pilot.
 
     Returns:
