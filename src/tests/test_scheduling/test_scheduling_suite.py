@@ -48,9 +48,8 @@ SRC_DIR = next(p for p in Path(__file__).resolve().parents if p.name == "src")
 sys.path.insert(0, str(SRC_DIR))
 
 import integrations.store as store  # noqa: E402
-from bot import bookings, scheduling  # noqa: E402
+from bot import bookings, class_types, scheduling  # noqa: E402
 from bot.scheduling import (  # noqa: E402
-    CLASS_CAPACITY,
     TIMEZONE,
     IntegrationNeedsReconnectError,
     IntegrationNotConnectedError,
@@ -310,6 +309,7 @@ class SchedulingSuite:
         self.created_event_ids: set[str] = set()  # subset this run created (safe to delete)
         self.reused_keys: list[str] = []
         self.original_descriptions: dict[str, str] = {}  # key -> description before any booking
+        self._class_capacity: dict[str, int | None] | None = None  # see class_capacity()
 
     # -- prerequisites ------------------------------------------------------
 
@@ -337,6 +337,19 @@ class SchedulingSuite:
     def connect(self) -> None:
         """Build the same authenticated client the engine uses."""
         self.service, self.calendar_id = scheduling._get_service_or_raise()
+
+    def class_capacity(self) -> dict[str, int | None]:
+        """The pilot's marker → capacity map, cached for this run.
+
+        Until Module S2 this was the CLASS_CAPACITY dict imported straight from
+        bot/scheduling.py. It now comes from the class_types table, and is read
+        ONCE here rather than per event: _classify() runs for every event in the
+        owner's calendar, and a query inside that loop is exactly the pattern
+        the module set out to avoid. The assertions that use it are unchanged.
+        """
+        if self._class_capacity is None:
+            self._class_capacity = class_types.load_class_types()["capacities"]
+        return self._class_capacity
 
     def _classify(self, event: dict, now: datetime) -> str | None:
         """Map an existing Calendar event onto one of the roteiro's fixture roles.
@@ -372,14 +385,17 @@ class SchedulingSuite:
         starts_at = datetime.fromisoformat(start["dateTime"]).astimezone(TIMEZONE)
         summary = event.get("summary") or ""
         match = scheduling._TITLE_MARKER_PATTERN.match(summary)
-        marker = scheduling._strip_accents(match.group(1)).upper() if match else None
+        # Same normalizer the engine applies, so this classification and
+        # _parse_class_type() can never disagree about what a title says.
+        marker = class_types.normalize_marker(match.group(1)) if match else None
+        capacities = self.class_capacity()
 
         if starts_at < now:
             # Only a past event with a *recognized* marker is the "aula passada"
             # fixture; anything else in the past is the owner's own history.
-            return "passada" if marker in CLASS_CAPACITY else None
+            return "passada" if marker in capacities else None
 
-        if marker not in CLASS_CAPACITY:
+        if marker not in capacities:
             return "sem_marcador"  # unrecognized or absent → engine falls back to ADULTOS
 
         return {"BABY": "baby", "CRIANCAS": "criancas", "ADULTOS": "adultos"}[marker]
@@ -577,7 +593,11 @@ class SchedulingSuite:
     def test_03_first_booking_keeps_slot(self) -> str:
         """Step 3: one booking in the baby class leaves 1 seat, slot still listed."""
         event_id = self.events["baby"]["id"]
-        result = book_slot(event_id, {"sender": _sender(1), "name": "Ana"})
+        # child_name is required for a class type flagged requires_child_name,
+        # which [BABY] is. The guard lives in book_slot() and predates Module S2
+        # (it arrived with Module 3); what S2 changed is only where the flag is
+        # read from — the code used to test `class_type in {"BABY","CRIANCAS"}`.
+        result = book_slot(event_id, {"sender": _sender(1), "name": "Ana", "child_name": "Aninha"})
 
         expect_equal(result["status"], "created", "status do 1º book na baby class")
         expect_equal(result.get("calendar_synced"), True, "calendar_synced")
@@ -596,7 +616,7 @@ class SchedulingSuite:
     def test_04_second_booking_hides_slot(self) -> str:
         """Step 4: the second booking fills the baby class, slot disappears."""
         event_id = self.events["baby"]["id"]
-        result = book_slot(event_id, {"sender": _sender(2), "name": "Beto"})
+        result = book_slot(event_id, {"sender": _sender(2), "name": "Beto", "child_name": "Betinho"})
 
         expect_equal(result["status"], "created", "status do 2º book na baby class")
         expect_equal(bookings.count_active_bookings(event_id), 2, "reservas ativas")
@@ -609,7 +629,7 @@ class SchedulingSuite:
     def test_05_third_booking_rejected(self) -> str:
         """Step 5: a third lead is refused, and nothing is written."""
         event_id = self.events["baby"]["id"]
-        result = book_slot(event_id, {"sender": _sender(3), "name": "Carla"})
+        result = book_slot(event_id, {"sender": _sender(3), "name": "Carla", "child_name": "Carlinha"})
 
         expect_equal(result["status"], "full", "status do 3º book")
         expect_equal(result.get("active_count"), 2, "active_count na recusa")
@@ -644,7 +664,11 @@ class SchedulingSuite:
 
         def racer(index: int) -> None:
             barrier.wait()
-            result = book_slot(event_id, {"sender": _sender(10 + index), "name": f"Racer{index}"})
+            result = book_slot(event_id, {
+                "sender": _sender(10 + index),
+                "name": f"Racer{index}",
+                "child_name": f"Racerzinho{index}",
+            })
             with lock:
                 outcomes.append(result)
 
@@ -663,7 +687,7 @@ class SchedulingSuite:
     def test_07_duplicate_sender(self) -> str:
         """Step 7: the same sender cannot book the same slot twice."""
         event_id = self.events["criancas"]["id"]
-        lead = {"sender": _sender(1), "name": "Ana"}
+        lead = {"sender": _sender(1), "name": "Ana", "child_name": "Aninha"}
 
         first = book_slot(event_id, lead)
         expect_equal(first["status"], "created", "1ª reserva na aula de crianças")
@@ -687,7 +711,7 @@ class SchedulingSuite:
         slot = _find_slot(get_available_slots(days_ahead=14), event_id)
         expect(slot is not None, "slot [ADULTOS] sumiu da lista — capacidade deveria ser ilimitada")
         expect_equal(slot["remaining_slots"], None, "vagas restantes (None = ilimitado)")
-        expect_equal(CLASS_CAPACITY["ADULTOS"], None, "CLASS_CAPACITY['ADULTOS']")
+        expect_equal(self.class_capacity()["ADULTOS"], None, "capacidade cadastrada de ADULTOS")
 
         return "5 reservas · slot segue listado como ilimitado"
 
@@ -861,6 +885,8 @@ class SchedulingSuite:
                "a descrição original do dono foi sobrescrita em vez de receber append")
         expect(_sender(1) in description, "o telefone do lead não aparece na seção de reservas")
         expect("Ana" in description, "o nome do lead não aparece na seção de reservas")
+        # A child class writes the child first, with the responsible adult noted.
+        expect("Aninha" in description, "o nome da criança não aparece na seção de reservas")
 
         booked_count = (event.get("extendedProperties", {})
                         .get("private", {})
