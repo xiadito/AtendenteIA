@@ -85,6 +85,198 @@
             </form>
         </section>
 
+        {#
+          Seção "Aulas" (Módulo S2). Cada turma é um formulário próprio, e
+          "tornar padrão" é um botão à parte: um clique nunca faz duas coisas.
+          O marcador aparece como texto, não como campo, porque ele também está
+          escrito no título dos eventos do Google Calendar — trocá-lo aqui
+          deixaria esses eventos órfãos. Para mudar, exclui e cadastra de novo.
+        #}
+        <section class="settings-section">
+            <h2>Aulas</h2>
+            <p class="section-desc">
+                As turmas que a academia oferece. O <strong>marcador</strong> é o que
+                você escreve entre colchetes no começo do título do evento na agenda —
+                <code>[CRIANCAS] Aula Experimental</code> — e é assim que a IA sabe
+                que turma é aquela e quantas vagas tem.
+            </p>
+
+            {% if class_types %}
+                <div class="class-type-list">
+                    {% for class_type in class_types %}
+                        <div class="class-type-row{% if class_type.is_fallback %} is-fallback{% endif %}">
+                            <div class="class-type-head">
+                                <span class="tag tag-marker">[{{ class_type.marker }}]</span>
+                                {% if class_type.is_fallback %}
+                                    <span class="tag tag-fallback">Turma padrão</span>
+                                {% endif %}
+                            </div>
+
+                            <form method="POST"
+                                  action="{{ url_for('dashboard.settings_save_class_type', marker=class_type.marker) }}"
+                                  class="class-type-form">
+                                <div class="field">
+                                    <label for="label-{{ class_type.marker }}">Nome</label>
+                                    <input type="text" id="label-{{ class_type.marker }}" name="label"
+                                           value="{{ class_type.label }}" required>
+                                </div>
+
+                                <div class="field">
+                                    <label for="capacity-{{ class_type.marker }}">Vagas</label>
+                                    <input type="number" id="capacity-{{ class_type.marker }}" name="capacity"
+                                           min="1" value="{{ class_type.capacity if class_type.capacity is not none else '' }}"
+                                           placeholder="ilimitado">
+                                    <span class="field-hint">Vazio = ilimitado.</span>
+                                </div>
+
+                                <div class="field field-check">
+                                    <label>
+                                        <input type="checkbox" name="requires_child_name"
+                                               {% if class_type.requires_child_name %}checked{% endif %}>
+                                        Exige o nome da criança
+                                    </label>
+                                    <span class="field-hint">
+                                        A IA pergunta o nome de quem vai assistir à aula antes de agendar.
+                                    </span>
+                                </div>
+
+                                <button type="submit" class="btn-save btn-inline">Salvar</button>
+                            </form>
+
+                            <div class="class-type-actions">
+                                {% if not class_type.is_fallback %}
+                                    <form method="POST"
+                                          action="{{ url_for('dashboard.settings_set_fallback_class_type', marker=class_type.marker) }}">
+                                        <button type="submit" class="btn-secondary">Tornar padrão</button>
+                                    </form>
+                                    <form method="POST"
+                                          action="{{ url_for('dashboard.settings_delete_class_type', marker=class_type.marker) }}">
+                                        <button type="submit" class="btn-danger">Excluir</button>
+                                    </form>
+                                {% else %}
+                                    <span class="field-hint">
+                                        Recebe os eventos cujo título está sem marcador. Para excluí-la,
+                                        marque outra turma como padrão antes.
+                                    </span>
+                                {% endif %}
+                            </div>
+                        </div>
+                    {% endfor %}
+                </div>
+            {% else %}
+                <p class="empty-note">
+                    Nenhuma turma cadastrada. Enquanto não houver, todo evento da agenda
+                    é tratado como uma turma de adultos sem limite de vagas.
+                </p>
+            {% endif %}
+
+            <form method="POST" action="{{ url_for('dashboard.settings_create_class_type') }}"
+                  class="class-type-new">
+                <h3>Nova turma</h3>
+
+                <div class="field">
+                    <label for="new_marker">Marcador</label>
+                    <input type="text" id="new_marker" name="marker" placeholder="CRIANCAS" required>
+                    <span class="field-hint">
+                        Só letras, sem números nem espaços. Acento e caixa não importam:
+                        "Crianças" e "CRIANCAS" são a mesma coisa.
+                    </span>
+                </div>
+
+                <div class="field">
+                    <label for="new_label">Nome</label>
+                    <input type="text" id="new_label" name="label" placeholder="Crianças" required>
+                    <span class="field-hint">Como aparece para o aluno e nos avisos.</span>
+                </div>
+
+                <div class="field">
+                    <label for="new_capacity">Vagas</label>
+                    <input type="number" id="new_capacity" name="capacity" min="1" placeholder="ilimitado">
+                    <span class="field-hint">Vazio = ilimitado.</span>
+                </div>
+
+                <div class="field field-check">
+                    <label>
+                        <input type="checkbox" name="requires_child_name">
+                        Exige o nome da criança
+                    </label>
+                </div>
+
+                <button type="submit" class="btn-save">Cadastrar turma</button>
+            </form>
+
+            {#
+              Criar a aula na agenda sem sair do painel. NÃO é uma grade: grava
+              um evento no Google Calendar e esquece, igualzinho ao dono digitar
+              no Google Agenda. A agenda segue sendo a fonte de verdade dos
+              horários — não guardamos nada disto do nosso lado.
+
+              A turma vem de uma lista, não de um campo de texto: o título do
+              evento é montado pelo código com o marcador certo, então não há
+              como digitar errado e a aula cair na turma padrão sem ninguém ver.
+            #}
+            <form method="POST" action="{{ url_for('dashboard.settings_create_class_event') }}"
+                  class="class-event-form">
+                <h3>Marcar uma aula na agenda</h3>
+
+                {% if class_types %}
+                    <div class="class-event-fields">
+                        <div class="field">
+                            <label for="event_marker">Turma</label>
+                            <select id="event_marker" name="marker" required>
+                                {% for class_type in class_types %}
+                                    <option value="{{ class_type.marker }}">{{ class_type.label }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+
+                        <div class="field">
+                            <label for="event_date">Data</label>
+                            <input type="date" id="event_date" name="date" required>
+                        </div>
+
+                        <div class="field">
+                            <label for="event_start">Início</label>
+                            <input type="time" id="event_start" name="start_time" required>
+                        </div>
+
+                        <div class="field">
+                            <label for="event_end">Fim</label>
+                            <input type="time" id="event_end" name="end_time" required>
+                        </div>
+                    </div>
+
+                    <span class="field-hint">
+                        A aula entra no Google Agenda como <code>[MARCADOR] Nome da turma</code>,
+                        na data e hora escolhidas, e a IA já passa a oferecer esse horário.
+                        Para remarcar ou apagar, use o Google Agenda — é lá que os horários vivem.
+                    </span>
+
+                    <button type="submit" class="btn-save">Marcar aula</button>
+                {% else %}
+                    <p class="empty-note">
+                        Cadastre uma turma acima antes de marcar uma aula.
+                    </p>
+                {% endif %}
+            </form>
+
+            <form method="POST" action="{{ url_for('dashboard.settings_save_scheduling') }}"
+                  class="scheduling-form">
+                <div class="field">
+                    <label for="days_ahead">Janela de horários</label>
+                    <input type="number" id="days_ahead" name="days_ahead"
+                           min="{{ min_days_ahead }}" max="{{ max_days_ahead }}"
+                           value="{{ days_ahead }}" required>
+                    <span class="field-hint">
+                        Quantos dias à frente a IA procura horários livres na agenda.
+                        Entre {{ min_days_ahead }} e {{ max_days_ahead }}.
+                    </span>
+                </div>
+
+                <button type="submit" class="btn-save">Salvar janela</button>
+            </form>
+        </section>
+
         <section class="settings-section">
             <h2>Conta</h2>
             <p class="section-desc">

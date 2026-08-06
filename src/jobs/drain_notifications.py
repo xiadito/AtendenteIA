@@ -11,9 +11,9 @@ import logging
 import sys
 
 import bot.bookings as bookings
+import bot.class_types as class_types
 import bot.owner_notifications as owner_notifications
 import whatsapp.whatsapp_service as whatsapp_service
-from bot.scheduling import CLASS_TYPE_LABELS
 
 logger = logging.getLogger(__name__)
 
@@ -22,11 +22,15 @@ logger = logging.getLogger(__name__)
 MAX_ATTEMPTS: int = 5
 
 
-def _compose_message(notification: dict) -> str:
+def _compose_message(notification: dict, class_labels: dict[str, str]) -> str:
     """Build the Portuguese WhatsApp text for one pending notification.
 
     Args:
         notification (dict): A row from owner_notifications.
+        class_labels (dict[str, str]): marker → label, loaded once by main().
+            Passed in because this is called once per pending row, and since
+            Module S2 the labels come from the database — reading them here
+            would be one query per notification.
 
     Returns:
         str: The message to send to the owner.
@@ -36,7 +40,7 @@ def _compose_message(notification: dict) -> str:
         if booking is None:
             return "Uma reserva foi feita, mas não encontrei os detalhes. Confira no painel."
 
-        class_label = CLASS_TYPE_LABELS.get(booking["class_type"], booking["class_type"])
+        class_label = class_labels.get(booking["class_type"], booking["class_type"])
         who = booking["lead_name"]
         if booking.get("child_name"):
             who = f"{booking['child_name']} (responsável: {booking['lead_name']})"
@@ -66,6 +70,10 @@ def main() -> int:
 
     try:
         pending = owner_notifications.list_pending_notifications(MAX_ATTEMPTS)
+        # Loaded once for the whole drain, before the loop. This runs outside
+        # Flask entirely (Railway cron), which is why bot/class_types.py reads
+        # straight through get_connection() with an explicit tenant.
+        class_labels: dict[str, str] = class_types.load_class_types()["labels"]
     except Exception:
         logger.exception("Could not list pending owner notifications; aborting this run.")
         return 1
@@ -74,7 +82,7 @@ def main() -> int:
 
     for notification in pending:
         try:
-            text = _compose_message(notification)
+            text = _compose_message(notification, class_labels)
             whatsapp_service.send_message(notification["owner_phone"], text)
             owner_notifications.mark_sent(notification["id"])
             logger.info("Notification %s delivered to owner.", notification["id"])

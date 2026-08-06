@@ -43,8 +43,8 @@ h1 {
     margin: 0 0 1.5rem;
 }
 
-/* Resultado do último salvamento. Fica acima das duas seções porque qualquer uma
-   das duas pode tê-lo produzido. */
+/* Resultado do último salvamento. Fica acima de todas as seções porque qualquer
+   uma delas pode tê-lo produzido. */
 .notice {
     padding: 0.6rem 0.85rem;
     border-radius: 6px;
@@ -56,8 +56,8 @@ h1 {
 .notice-warning { background: #fff3cd; color: #856404; }  /* amarelo  */
 .notice-error   { background: #f8d7da; color: #721c24; }  /* vermelho */
 
-/* Os dois blocos da tela. A linha divisória é o que faz "IA" e "Conta" lerem
-   como assuntos separados, que é o ponto de terem formulários separados. */
+/* Os blocos da tela. A linha divisória é o que faz "IA", "Aulas" e "Conta"
+   lerem como assuntos separados, que é o ponto de terem formulários separados. */
 .settings-section {
     padding-top: 1.5rem;
     border-top: 1px solid var(--input-border);
@@ -96,7 +96,8 @@ h1 {
 }
 
 .field input,
-.field textarea {
+.field textarea,
+.field select {
     font-family: inherit;
     font-size: 0.9rem;
     color: var(--text);
@@ -114,7 +115,8 @@ h1 {
 }
 
 .field input:focus,
-.field textarea:focus {
+.field textarea:focus,
+.field select:focus {
     outline: none;
     border-color: var(--brand);
 }
@@ -180,3 +182,140 @@ h1 {
 }
 
 .integration-link:hover { text-decoration: underline; }
+
+/* --- Seção "Aulas" (Módulo S2) -------------------------------------------
+   Cada turma é um cartão dentro da seção. A turma padrão ganha uma borda
+   destacada porque é a única com consequência invisível: é ela que recebe os
+   eventos cujo título está sem marcador. */
+.class-type-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+    margin-bottom: 1.5rem;
+}
+
+.class-type-row {
+    border: 1px solid var(--input-border);
+    border-radius: 8px;
+    padding: 0.9rem 1rem 0.4rem;
+}
+
+.class-type-row.is-fallback {
+    border-color: var(--brand);
+}
+
+.class-type-head {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 0.8rem;
+}
+
+.tag-marker {
+    background: #f0f0f0;
+    color: #666666;
+    font-family: ui-monospace, "Cascadia Code", "Source Code Pro", monospace;
+}
+
+.tag-fallback {
+    background: var(--brand);
+    color: #ffffff;
+}
+
+/* Os três campos de uma turma cabem lado a lado numa tela larga e empilham
+   sozinhos numa estreita — sem media query, o auto-fit resolve. */
+.class-type-form {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 0 1rem;
+    align-items: start;
+}
+
+.field-check label {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    font-weight: 500;
+    cursor: pointer;
+}
+
+.field-check input {
+    width: auto;
+    margin: 0;
+}
+
+.btn-inline {
+    align-self: start;
+    margin-top: 1.55rem;
+}
+
+.class-type-actions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    padding-top: 0.2rem;
+    padding-bottom: 0.8rem;
+}
+
+.class-type-actions .field-hint { margin-top: 0; }
+
+.btn-secondary,
+.btn-danger {
+    background: transparent;
+    border: 1px solid var(--input-border);
+    border-radius: 6px;
+    padding: 0.35rem 0.8rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text);
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s;
+}
+
+.btn-secondary:hover { border-color: var(--brand); color: var(--brand); }
+.btn-danger:hover    { border-color: #c0392b; color: #c0392b; }
+
+.class-type-new,
+.class-event-form,
+.scheduling-form {
+    border-top: 1px solid var(--input-border);
+    padding-top: 1.1rem;
+}
+
+.class-type-new h3,
+.class-event-form h3 {
+    margin: 0 0 0.9rem;
+    font-size: 0.95rem;
+    font-weight: 600;
+}
+
+/* Turma, data, início e fim numa linha só quando cabe. Os campos de hora são
+   estreitos, então o minmax menor que o das turmas é proposital. */
+.class-event-fields {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 0 1rem;
+    align-items: start;
+}
+
+.class-event-form .field-hint {
+    display: block;
+    margin: 0 0 1rem;
+}
+
+.empty-note {
+    font-size: 0.85rem;
+    opacity: 0.7;
+    margin: 0 0 1.5rem;
+    line-height: 1.5;
+}
+
+.section-desc code {
+    font-family: ui-monospace, "Cascadia Code", "Source Code Pro", monospace;
+    font-size: 0.85em;
+    background: var(--input-border);
+    border-radius: 4px;
+    padding: 0.05rem 0.3rem;
+}

@@ -1,13 +1,13 @@
 import logging
 import re
-import unicodedata
 from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
 import integrations.store as store
-from bot import bookings
+from bot import bookings, class_types
 from integrations.google_calendar import NeedsReconnectError, get_calendar_service
+from integrations.store import DEFAULT_TENANT_ID
 
 logger = logging.getLogger(__name__)
 
@@ -15,19 +15,11 @@ TIMEZONE = ZoneInfo("America/Sao_Paulo")
 
 # Business rule, not Calendar data: Google Calendar remains the source of truth
 # for which slots exist, when, and of what type (via the title marker below).
-# How many leads fit in each type is a decision that lives in code so it can
-# change without anyone editing the calendar.
-CLASS_CAPACITY: dict[str, int | None] = {
-    "BABY": 2,
-    "CRIANCAS": 4,
-    "ADULTOS": None,  # unlimited
-}
-
-CLASS_TYPE_LABELS: dict[str, str] = {
-    "BABY": "Baby Class",
-    "CRIANCAS": "Crianças",
-    "ADULTOS": "Adultos",
-}
+# How many leads fit in each type is the tenant's decision, and since Module S2
+# it lives in the class_types table rather than in a dict here — see
+# bot/class_types.py. Every function below that needs it loads the tenant's
+# types ONCE and passes the bundle down; nothing in this module reads them
+# per slot.
 
 # Matches a "[MARKER]" at the start of an event title, tolerant of extra
 # spaces and accented letters (e.g. "[ CRIANÇAS ]").
@@ -38,6 +30,12 @@ _TITLE_MARKER_PATTERN = re.compile(r"^\s*\[\s*([a-zA-ZÀ-ÿ]+)\s*\]")
 # duplicating the header, since capacity > 1 means more than one lead can
 # book the same slot over time.
 BOOKING_SECTION_MARKER = "--- Reservas Corujai ---"
+
+# Written into the description of an event created from the settings screen, so
+# the owner scrolling their calendar knows where it came from. It sits ABOVE the
+# booking section marker that _patch_event_with_booking() appends later, and is
+# never parsed — the class type always comes from the title.
+CREATED_FROM_PANEL_NOTE = "Aula criada pelo painel Corujai."
 
 _WEEKDAY_NAMES_PT = [
     "segunda-feira", "terça-feira", "quarta-feira", "quinta-feira",
@@ -56,31 +54,36 @@ class IntegrationNeedsReconnectError(Exception):
     """
 
 
-def _strip_accents(value: str) -> str:
-    """Remove accents so the title marker parser is accent-insensitive."""
-    normalized = unicodedata.normalize("NFKD", value)
-    return "".join(char for char in normalized if not unicodedata.combining(char))
-
-
-def _parse_class_type(title: str) -> str:
+def _parse_class_type(title: str, tenant_types: dict[str, Any]) -> str:
     """Parse the class type marker from a Calendar event title.
+
+    The marker read from the title goes through the SAME normalizer the
+    settings screen uses to store one (class_types.normalize_marker), so
+    "[ Crianças ]" typed into the calendar and "crianças" typed into the form
+    can never end up as two different types.
 
     Args:
         title (str): Event summary, e.g. "[CRIANCAS] Aula Experimental".
+        tenant_types (dict[str, Any]): The bundle from
+            class_types.load_class_types(), loaded once by the caller.
 
     Returns:
-        str: One of CLASS_CAPACITY's keys. Falls back to "ADULTOS" (unlimited)
-        for any title that doesn't start with a recognized marker, so a
-        mis-typed slot never blocks a booking.
+        str: A key of tenant_types["capacities"] — guaranteed, because the
+        fallback is itself one (see load_class_types()). Any title without a
+        recognized marker falls back, so a mis-typed slot never blocks a
+        booking, and callers can look capacity up directly without a KeyError.
     """
     match = _TITLE_MARKER_PATTERN.match(title or "")
     if match:
-        marker = _strip_accents(match.group(1)).upper()
-        if marker in CLASS_CAPACITY:
+        marker: str | None = class_types.normalize_marker(match.group(1))
+        if marker is not None and marker in tenant_types["capacities"]:
             return marker
 
-    logger.warning("Unrecognized class marker in event title '%s'; defaulting to ADULTOS.", title)
-    return "ADULTOS"
+    fallback: str = tenant_types["fallback"]
+    logger.warning(
+        "Unrecognized class marker in event title '%s'; defaulting to %s.", title, fallback,
+    )
+    return fallback
 
 
 def _parse_rfc3339(value: str) -> datetime:
@@ -95,10 +98,16 @@ def _parse_rfc3339(value: str) -> datetime:
     return datetime.fromisoformat(value).astimezone(TIMEZONE)
 
 
-def _format_slot_label(start: datetime, class_type: str) -> str:
-    """Build a Portuguese, human-readable label for a slot."""
+def _format_slot_label(start: datetime, class_type: str, labels: dict[str, str]) -> str:
+    """Build a Portuguese, human-readable label for a slot.
+
+    Args:
+        start (datetime): Slot start, in São Paulo time.
+        class_type (str): The slot's class type marker.
+        labels (dict[str, str]): marker → label, from the tenant's bundle.
+    """
     weekday = _WEEKDAY_NAMES_PT[start.weekday()].capitalize()
-    class_label = CLASS_TYPE_LABELS.get(class_type, class_type.title())
+    class_label = labels.get(class_type, class_type.title())
     return f"{weekday}, {start.strftime('%d/%m')} às {start.strftime('%H:%M')} — {class_label}"
 
 
@@ -130,16 +139,92 @@ def _get_service_or_raise() -> tuple[Any, str]:
     return service, owner["calendar_id"]
 
 
-def get_available_slots(days_ahead: int = 14) -> list[dict]:
+def create_class_event(
+    marker: str,
+    start: datetime,
+    end: datetime,
+    tenant_id: str = DEFAULT_TENANT_ID,
+) -> dict:
+    """Create one class occurrence on the owner's Calendar.
+
+    THIS IS THE ONLY events.insert IN THE PROJECT, and it does not weaken the
+    rule it appears to. Google Calendar stays the single source of truth for
+    which slots exist and when: this writes the event and then forgets it, the
+    same way the owner typing into Google Calendar does. Nothing is stored on
+    our side, so there is no second record of availability to drift. What was
+    refused (Module S2, decision 7A) is a *grid* — a recurring rule in Postgres
+    that defines availability and has to generate and reconcile events.
+
+    The title is BUILT, never typed: "[MARKER] Label", both taken from the
+    tenant's registered class type. The marker is what _parse_class_type() reads
+    the event back with — building it removes the whole class of typos that
+    would otherwise silently drop an event into the fallback — and the label is
+    there so the owner reading their own Google Calendar sees a class name
+    ("Crianças"), not just a machine key.
+
+    Args:
+        marker (str): Canonical marker of a class type registered for the
+            tenant. Validated here against class_types, not trusted.
+        start (datetime): Timezone-aware start of the class.
+        end (datetime): Timezone-aware end of the class.
+        tenant_id (str): Tenant whose class types and calendar apply.
+
+    Returns:
+        dict: {"status": "created", "event_id": str, "summary": str,
+        "label": str} on success; {"status": "unknown_class_type"} if the marker
+        is not one of the tenant's; {"status": "integration_not_connected"} or
+        {"status": "needs_reconnect"} if the calendar is unusable.
+    """
+    tenant_types: dict[str, Any] = class_types.load_class_types(tenant_id)
+    if marker not in tenant_types["capacities"]:
+        logger.warning("Refused to create an event for unknown class type '%s'.", marker)
+        return {"status": "unknown_class_type"}
+
+    try:
+        service, calendar_id = _get_service_or_raise()
+    except IntegrationNotConnectedError:
+        return {"status": "integration_not_connected"}
+    except IntegrationNeedsReconnectError:
+        return {"status": "needs_reconnect"}
+
+    summary = f"[{marker}] {tenant_types['labels'][marker]}"
+    event = service.events().insert(
+        calendarId=calendar_id,
+        body={
+            "summary": summary,
+            "description": CREATED_FROM_PANEL_NOTE,
+            "start": {"dateTime": start.isoformat(), "timeZone": str(TIMEZONE)},
+            "end": {"dateTime": end.isoformat(), "timeZone": str(TIMEZONE)},
+        },
+    ).execute()
+
+    logger.info("Class event %s created for tenant %s (%s).", event["id"], tenant_id, summary)
+    return {
+        "status": "created",
+        "event_id": event["id"],
+        "summary": summary,
+        "label": _format_slot_label(start, marker, tenant_types["labels"]),
+    }
+
+
+def get_available_slots(
+    days_ahead: int | None = None,
+    tenant_id: str = DEFAULT_TENANT_ID,
+) -> list[dict]:
     """List Calendar slots that still have open seats.
 
     Args:
-        days_ahead (int): How many days ahead of now to look for slots.
+        days_ahead (int | None): How many days ahead of now to look for slots.
+            None reads the tenant's configured horizon (scheduling_configs,
+            default 14); an explicit value overrides it without touching the
+            database.
+        tenant_id (str): Tenant whose class types and horizon apply.
 
     Returns:
         list[dict]: Each item has event_id, class_type, start, end,
-        remaining_slots (int | None; None means unlimited) and label,
-        ordered by start time. Full slots and all-day events are omitted.
+        remaining_slots (int | None; None means unlimited), requires_child_name
+        and label, ordered by start time. Full slots and all-day events are
+        omitted.
 
     Raises:
         IntegrationNotConnectedError: The owner hasn't connected Google
@@ -147,6 +232,14 @@ def get_available_slots(days_ahead: int = 14) -> list[dict]:
         IntegrationNeedsReconnectError: Google rejected the refresh_token.
     """
     service, calendar_id = _get_service_or_raise()
+
+    if days_ahead is None:
+        days_ahead = class_types.get_scheduling_config(tenant_id)["days_ahead"]
+
+    # ONE read for the whole sweep. The loop below runs once per Calendar event,
+    # so looking a type up in the database per event would turn a single query
+    # into one per slot.
+    tenant_types: dict[str, Any] = class_types.load_class_types(tenant_id)
 
     now = datetime.now(TIMEZONE)
     events_result = service.events().list(
@@ -169,8 +262,10 @@ def get_available_slots(days_ahead: int = 14) -> list[dict]:
         if start < now:
             continue  # defensive; timeMin already excludes past instances
 
-        class_type = _parse_class_type(event.get("summary", ""))
-        capacity = CLASS_CAPACITY[class_type]
+        class_type = _parse_class_type(event.get("summary", ""), tenant_types)
+        # Direct lookup, no .get: _parse_class_type only ever returns a key of
+        # this dict — including its fallback. See load_class_types().
+        capacity = tenant_types["capacities"][class_type]
         active_count = bookings.count_active_bookings(event["id"])
 
         if capacity is not None and active_count >= capacity:
@@ -183,13 +278,18 @@ def get_available_slots(days_ahead: int = 14) -> list[dict]:
             "start": start,
             "end": end,
             "remaining_slots": remaining,
-            "label": _format_slot_label(start, class_type),
+            "requires_child_name": class_type in tenant_types["child_name_required"],
+            "label": _format_slot_label(start, class_type, tenant_types["labels"]),
         })
 
     return slots
 
 
-def book_slot(event_id: str, lead: dict[str, str]) -> dict:
+def book_slot(
+    event_id: str,
+    lead: dict[str, str],
+    tenant_id: str = DEFAULT_TENANT_ID,
+) -> dict:
     """Book a lead into a Calendar event's slot.
 
     Postgres is written first, under create_booking_with_lock()'s advisory
@@ -205,8 +305,10 @@ def book_slot(event_id: str, lead: dict[str, str]) -> dict:
         event_id (str): Calendar event id, as returned by get_available_slots().
         lead (dict[str, str]): Must contain "sender" (WhatsApp number, e.g.
             "5521999999999") and "name" (lead's name, already resolved by the AI).
-            For [BABY]/[CRIANCAS] slots it must also carry "child_name" (the child
-            who attends); the responsible adult stays in "name".
+            For a slot whose class type has requires_child_name set it must also
+            carry "child_name" (the child who attends); the responsible adult
+            stays in "name".
+        tenant_id (str): Tenant whose class types apply.
 
     Returns:
         dict: On success, {"status": "created", "booking_id": str,
@@ -226,9 +328,13 @@ def book_slot(event_id: str, lead: dict[str, str]) -> dict:
     except IntegrationNeedsReconnectError:
         return {"status": "needs_reconnect"}
 
+    tenant_types: dict[str, Any] = class_types.load_class_types(tenant_id)
+
     event = service.events().get(calendarId=calendar_id, eventId=event_id).execute()
-    class_type = _parse_class_type(event.get("summary", ""))
-    capacity = CLASS_CAPACITY[class_type]
+    class_type = _parse_class_type(event.get("summary", ""), tenant_types)
+    # Direct lookup, no .get — see the identical note in get_available_slots().
+    capacity = tenant_types["capacities"][class_type]
+    requires_child_name: bool = class_type in tenant_types["child_name_required"]
     start = _parse_rfc3339(event["start"]["dateTime"])
     end = _parse_rfc3339(event["end"]["dateTime"])
 
@@ -237,7 +343,7 @@ def book_slot(event_id: str, lead: dict[str, str]) -> dict:
     # the code never trusts that the AI supplied a required field. Reject before
     # touching Postgres so the conversation can go back and collect the name.
     child_name = (lead.get("child_name") or "").strip()
-    if class_type in {"BABY", "CRIANCAS"} and not child_name:
+    if requires_child_name and not child_name:
         logger.info("Booking rejected for event %s: %s class needs a child name.", event_id, class_type)
         return {"status": "missing_child_name"}
 
@@ -256,7 +362,9 @@ def book_slot(event_id: str, lead: dict[str, str]) -> dict:
         return result
 
     try:
-        _patch_event_with_booking(service, calendar_id, event, lead, class_type, result["active_count"])
+        _patch_event_with_booking(
+            service, calendar_id, event, lead, requires_child_name, result["active_count"],
+        )
         result["calendar_synced"] = True
     except Exception:
         logger.exception(
@@ -273,7 +381,7 @@ def _patch_event_with_booking(
     calendar_id: str,
     event: dict,
     lead: dict[str, str],
-    class_type: str,
+    requires_child_name: bool,
     booked_count: int,
 ) -> None:
     """Patch a Calendar event's description and metadata after a successful booking.
@@ -290,14 +398,17 @@ def _patch_event_with_booking(
         event (dict): The event resource fetched via events.get().
         lead (dict[str, str]): Must contain "sender" and "name". For child
             classes it also carries "child_name".
-        class_type (str): One of CLASS_CAPACITY's keys. Selects the line format:
-            child classes show the child first with the responsible adult noted.
+        requires_child_name (bool): Whether this slot's class type asks for the
+            attending child's name. Passed in rather than re-derived, so it can
+            never disagree with the check book_slot() already made. Selects the
+            line format: child classes show the child first with the responsible
+            adult noted.
         booked_count (int): Active booking count for this event, after the insert.
     """
     description = event.get("description") or ""
     confirmed_at = datetime.now(TIMEZONE).strftime("%d/%m/%Y %H:%M")
     child_name = (lead.get("child_name") or "").strip()
-    if class_type in {"BABY", "CRIANCAS"} and child_name:
+    if requires_child_name and child_name:
         booking_line = f"- {child_name} (resp.: {lead['name']} — {lead['sender']}) — confirmado em {confirmed_at}"
     else:
         booking_line = f"- {lead['name']} ({lead['sender']}) — confirmado em {confirmed_at}"
