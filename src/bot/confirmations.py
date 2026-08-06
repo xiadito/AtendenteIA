@@ -35,7 +35,8 @@ import logging
 import bot.bookings as bookings
 import bot.messages as messages
 import whatsapp.whatsapp_service as whatsapp_service
-from bot.scheduling import CLASS_TYPE_LABELS, TIMEZONE
+import bot.class_types as class_types
+from bot.scheduling import TIMEZONE
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +135,9 @@ def _compose_lead_message(booking: dict, decision: str) -> str:
     Returns:
         str: The message to send to the lead.
     """
-    class_label = CLASS_TYPE_LABELS.get(booking["class_type"], booking["class_type"])
+    # One read per decision — this is a single booking, not a loop.
+    class_labels: dict[str, str] = class_types.load_class_types()["labels"]
+    class_label = class_labels.get(booking["class_type"], booking["class_type"])
     when = booking["slot_start"].astimezone(TIMEZONE).strftime("%d/%m às %H:%M")
     lead_name = booking["lead_name"]
     child_name = booking.get("child_name")

@@ -7,12 +7,12 @@ from whatsapp.whatsapp_service import send_message
 from bot.handlers import handle_text_message
 import bot.ai_configs as ai_configs
 import bot.bookings as bookings
+import bot.class_types as class_types
 import bot.confirmations as confirmations
 import bot.messages as messages
 import bot.owner_notifications as owner_notifications
 import bot.session as session_store
 import integrations.store as store
-from bot.scheduling import CLASS_TYPE_LABELS
 
 
 # Configura o sistema de logs para mostrar data/hora, nível e mensagem
@@ -455,7 +455,7 @@ def _bookings_context(notice: dict | None = None) -> dict:
     """
     return {
         "bookings": bookings.list_bookings_for_review(),
-        "class_labels": CLASS_TYPE_LABELS,
+        "class_labels": class_types.load_class_types()["labels"],
         "notice": notice,
     }
 
@@ -540,11 +540,15 @@ def _booking_decision_response(booking_id: str, decision: str):
 # AI's personality and the owner's phone number were only reachable by hand-run
 # SQL — migration 003 says so in its own header.
 #
-# ONE PAGE, TWO SECTIONS, TWO POSTS. "IA" edits ai_configs; "Conta" edits
-# owners.owner_phone and shows (read-only) the Google Calendar status. They are
+# ONE PAGE, SEVERAL SECTIONS, ONE POST EACH. "IA" edits ai_configs; "Conta"
+# edits owners.owner_phone and shows (read-only) the Google Calendar status;
+# "Aulas" (Module S2) edits class_types and scheduling_configs. They are
 # separate POSTs because they have nothing to do with each other: an owner
 # fixing a typo in their phone number must not rewrite the AI's tone as a side
-# effect of submitting one big form.
+# effect of submitting one big form. The Aulas section takes that further —
+# each class type is its own form, and making one the default is its own button,
+# so no single click can both edit a class and change which one catches
+# unmarked events.
 #
 # No HTMX here, unlike /inbox and /bookings: there is no list that changes on
 # its own, so a plain form post that re-renders the page is the whole
@@ -583,6 +587,10 @@ def _settings_context(notice: dict | None = None, ai_form: dict[str, str] | None
         "owner_phone": notification_owner["owner_phone"] if notification_owner else None,
         "integration_status": owner["integration_status"] if owner else "disconnected",
         "google_email": owner["google_email"] if owner else None,
+        "class_types": class_types.list_class_types(),
+        "days_ahead": class_types.get_scheduling_config()["days_ahead"],
+        "min_days_ahead": class_types.MIN_DAYS_AHEAD,
+        "max_days_ahead": class_types.MAX_DAYS_AHEAD,
         "notice": notice,
     }
 
@@ -669,4 +677,185 @@ def settings_save_account():
         return render_template("settings.html", **_settings_context(notice)), 200
 
     notice = {"kind": "success", "text": "Número do dono salvo."}
+    return render_template("settings.html", **_settings_context(notice)), 200
+
+
+# --- Seção "Aulas" (Module S2) ---------------------------------------------
+#
+# Onde o dono cadastra os tipos de aula que antes eram dois dicts no código.
+# As rotas abaixo só traduzem formulário em chamada e resultado em português —
+# as regras (marcador canônico, capacidade, não excluir a turma padrão) moram em
+# bot/class_types.py, para valerem também para quem escrever por SQL.
+
+
+def _settings_error(text: str) -> tuple[str, int]:
+    """Re-renderiza a tela com um aviso de erro, sempre 200.
+
+    200 e não 4xx pelo mesmo motivo do inbox: o dono precisa ver a página com o
+    aviso, não uma tela de erro do navegador.
+
+    Args:
+        text (str): O aviso, em português.
+
+    Returns:
+        tuple[str, int]: (HTML, 200).
+    """
+    return render_template("settings.html", **_settings_context({"kind": "error", "text": text})), 200
+
+
+def _parse_capacity(raw: str) -> tuple[bool, int | None]:
+    """Interpreta o campo de capacidade do formulário.
+
+    Vazio significa ILIMITADO e vira None — a mesma semântica que a coluna
+    `capacity` NULL carrega no banco e que `get_available_slots()` testa com
+    `if capacity is not None`. Zero ou negativo não é "ilimitado", é uma turma
+    que nunca aceita ninguém, então é recusado aqui e pelo CHECK da tabela.
+
+    Args:
+        raw (str): O que veio do formulário.
+
+    Returns:
+        tuple[bool, int | None]: (válido, capacidade). Capacidade None com
+        válido=True significa ilimitado.
+    """
+    stripped: str = (raw or "").strip()
+
+    if not stripped:
+        return True, None
+
+    try:
+        value: int = int(stripped)
+    except ValueError:
+        return False, None
+
+    if value < 1:
+        return False, None
+
+    return True, value
+
+
+@dashboard_bp.route("/settings/class-types", methods=["POST"])
+@_require_auth
+def settings_create_class_type():
+    """Cadastra um tipo de aula novo.
+
+    O marcador passa por class_types.normalize_marker(), que é o mesmo
+    normalizador que o motor usa ao ler o título do evento no Calendar. É isso
+    que garante que "Crianças" digitado aqui e "[ CRIANÇAS ]" digitado na agenda
+    sejam o mesmo tipo — e que um marcador com número ou espaço, que o regex do
+    título nunca casaria, seja recusado em vez de virar um tipo invisível.
+    """
+    marker: str | None = class_types.normalize_marker(request.form.get("marker", ""))
+    label: str = request.form.get("label", "").strip()
+    valid_capacity, capacity = _parse_capacity(request.form.get("capacity", ""))
+    requires_child_name: bool = request.form.get("requires_child_name") == "on"
+
+    if marker is None:
+        return _settings_error(
+            "Marcador inválido. Use só letras, sem números, espaços ou símbolos — "
+            "é ele que vai entre colchetes no título do evento, como [CRIANCAS]."
+        )
+
+    if not label:
+        return _settings_error("Informe o nome da turma como o aluno deve ler, por exemplo Crianças.")
+
+    if not valid_capacity:
+        return _settings_error("Capacidade inválida. Use um número inteiro a partir de 1, ou deixe vazio para ilimitado.")
+
+    if class_types.create_class_type(marker, label, capacity, requires_child_name) == "duplicate":
+        return _settings_error(f"Já existe uma turma com o marcador [{marker}].")
+
+    notice: dict = {"kind": "success", "text": f"Turma [{marker}] cadastrada."}
+    return render_template("settings.html", **_settings_context(notice)), 200
+
+
+@dashboard_bp.route("/settings/class-types/<marker>", methods=["POST"])
+@_require_auth
+def settings_save_class_type(marker: str):
+    """Salva nome, capacidade e exigência de nome da criança de uma turma.
+
+    O marcador não é editável — ele é a chave e também está escrito à mão no
+    título de cada evento do Calendar. Renomeá-lo aqui deixaria todos os eventos
+    existentes órfãos, caindo na turma padrão sem ninguém perceber.
+    """
+    label: str = request.form.get("label", "").strip()
+    valid_capacity, capacity = _parse_capacity(request.form.get("capacity", ""))
+    requires_child_name: bool = request.form.get("requires_child_name") == "on"
+
+    if not label:
+        return _settings_error("Informe o nome da turma como o aluno deve ler, por exemplo Crianças.")
+
+    if not valid_capacity:
+        return _settings_error("Capacidade inválida. Use um número inteiro a partir de 1, ou deixe vazio para ilimitado.")
+
+    if not class_types.update_class_type(marker, label, capacity, requires_child_name):
+        return _settings_error(f"Não encontrei a turma [{marker}] para salvar.")
+
+    notice: dict = {"kind": "success", "text": f"Turma [{marker}] salva."}
+    return render_template("settings.html", **_settings_context(notice)), 200
+
+
+@dashboard_bp.route("/settings/class-types/<marker>/fallback", methods=["POST"])
+@_require_auth
+def settings_set_fallback_class_type(marker: str):
+    """Define qual turma recebe os eventos sem marcador reconhecido no título."""
+    if not class_types.set_fallback_class_type(marker):
+        return _settings_error(f"Não encontrei a turma [{marker}].")
+
+    notice: dict = {
+        "kind": "success",
+        "text": (
+            f"[{marker}] agora é a turma padrão: eventos sem marcador no título "
+            "passam a ser tratados como dessa turma."
+        ),
+    }
+    return render_template("settings.html", **_settings_context(notice)), 200
+
+
+@dashboard_bp.route("/settings/class-types/<marker>/delete", methods=["POST"])
+@_require_auth
+def settings_delete_class_type(marker: str):
+    """Exclui uma turma, exceto a padrão.
+
+    A recusa vem de bot/class_types.py, não daqui: sem a turma padrão o sistema
+    passaria a inventar uma em memória, e o dono não teria como descobrir pela
+    tela por que os eventos sem marcador mudaram de comportamento.
+    """
+    result: str = class_types.delete_class_type(marker)
+
+    if result == "not_found":
+        return _settings_error(f"Não encontrei a turma [{marker}].")
+
+    if result == "is_fallback":
+        return _settings_error(
+            f"[{marker}] é a turma padrão e não pode ser excluída. "
+            "É ela que recebe os eventos cujo título está sem marcador. "
+            "Marque outra como padrão antes de excluir esta."
+        )
+
+    notice: dict = {"kind": "success", "text": f"Turma [{marker}] excluída."}
+    return render_template("settings.html", **_settings_context(notice)), 200
+
+
+@dashboard_bp.route("/settings/scheduling", methods=["POST"])
+@_require_auth
+def settings_save_scheduling():
+    """Salva a janela de busca de horários (days_ahead)."""
+    raw: str = request.form.get("days_ahead", "").strip()
+
+    try:
+        days_ahead: int = int(raw)
+    except ValueError:
+        return _settings_error("Informe um número inteiro de dias.")
+
+    if not class_types.MIN_DAYS_AHEAD <= days_ahead <= class_types.MAX_DAYS_AHEAD:
+        return _settings_error(
+            f"Use um valor entre {class_types.MIN_DAYS_AHEAD} e "
+            f"{class_types.MAX_DAYS_AHEAD} dias."
+        )
+
+    if not class_types.update_days_ahead(days_ahead):
+        return _settings_error("Não encontrei a configuração de agendamento desta academia para salvar.")
+
+    notice: dict = {"kind": "success", "text": f"A IA passa a oferecer horários dos próximos {days_ahead} dias."}
     return render_template("settings.html", **_settings_context(notice)), 200
