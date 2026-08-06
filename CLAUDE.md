@@ -530,6 +530,7 @@ A password-protected web dashboard is available at `/dashboard/menu`. Routes are
 | `/dashboard/settings/class-types/<marker>` | POST | Saves a class type's label, capacity and child-name flag |
 | `/dashboard/settings/class-types/<marker>/fallback` | POST | Makes it the tenant's fallback class type |
 | `/dashboard/settings/class-types/<marker>/delete` | POST | Deletes a class type (never the fallback) |
+| `/dashboard/settings/class-events` | POST | Creates one class on the Calendar (class + date + start/end) |
 | `/dashboard/settings/scheduling` | POST | Saves `days_ahead`, the Calendar search horizon |
 
 Every route above is behind `@_require_auth`. The four per-sender ones `404` on a number with
@@ -742,6 +743,25 @@ The "Aulas" section of `/dashboard/settings` is the write UI. The rules (canonic
 capacity, refusing to delete the fallback) live in `bot/class_types.py`, not in the routes, so
 they hold for SQL and the CLI too.
 
+**Marking a class on the calendar from the panel — the one `events.insert` in the project.**
+`scheduling.create_class_event(marker, start, end)` writes a single event and forgets it, which
+does **not** weaken the rule it appears to: Google Calendar stays the single source of truth for
+which slots exist, exactly as when the owner types into Google Calendar directly. Nothing about
+the class occurrence is stored on our side, so there is no second record of availability to
+drift. What decision 7A refused is a **grid** — a recurring rule in Postgres that *defines*
+availability and then has to generate and reconcile events. A one-shot form has neither problem.
+
+The title is **built, never typed**: `[MARKER] Label`, both from the tenant's registered class
+type, which the owner picks from a `<select>`. The marker is what `_parse_class_type()` reads
+back, so building it removes the typo that would silently drop the event into the fallback; the
+label is there so the owner reading their own calendar sees "Crianças", not a machine key.
+Validation (`_parse_class_event_window()` in `routes.py`) applies the São Paulo timezone
+explicitly — the server runs UTC on Railway, so a naive datetime would land the class three
+hours off — and refuses an end at or before the start, and any window already in the past.
+
+Editing and deleting an occurrence is **not** in the panel: the Calendar is where the schedule
+lives, and the screen says so. See Known Issues.
+
 Testing roteiro: `src/tests/test_class_types/CLASS_TYPES_TESTING.md`.
 
 ### Google Calendar Integration
@@ -907,7 +927,17 @@ Defined in `src/.env` and loaded via `config.py`:
   `[MARKER]` in their titles, and from then on fall into the tenant's fallback class, silently
   taking the fallback's capacity. The owner has to edit those titles by hand. Detectable but not
   detected: nothing warns that a marker in use has no matching row. A "titles referencing an
-  unknown marker" check on the settings screen would close it.
+  unknown marker" check on the settings screen would close it. Classes created from the panel
+  are immune (the title is built from a `<select>`), but hand-typed ones are not.
+- **A class marked from the panel cannot be edited or deleted there.** The form creates one
+  event and that is all: to move it, cancel it, or make it recurring, the owner goes to Google
+  Calendar. That is consistent (the Calendar owns the schedule) but it is a one-way door in the
+  UI, and a mistyped time means creating the right one and deleting the wrong one by hand. A
+  list of upcoming classes with a delete button is the obvious next step, and needs no schema.
+- **Nothing stops two identical classes being created.** The form does not check whether the
+  tenant already has an event at that time, so double-submitting makes two slots the AI will
+  happily offer separately. Harmless to capacity (each event counts its own bookings) but
+  confusing on the calendar.
 - **A tenant with no `is_fallback` row runs on a synthetic class type.** `load_class_types()`
   invents an unlimited `ADULTOS` so an unmarked event degrades instead of raising — correct, and
   deliberate, but it means a misconfigured tenant works *quietly*. It shows up only as a

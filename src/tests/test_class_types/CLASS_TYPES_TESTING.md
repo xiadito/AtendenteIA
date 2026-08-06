@@ -198,9 +198,40 @@ vale igual para quem escrever por SQL, pela tela ou pela CLI. Sem ela, o tenant 
 depender de uma turma sintética que ninguém escolheu, e o dono não teria como descobrir pela
 tela por que os eventos sem marcador mudaram de comportamento.
 
-### 6. A tela
+### 6. O fluxo completo do dono, na tela
 
-`/dashboard/settings`, seção **Aulas**. Confira:
+`/dashboard/settings`, seção **Aulas**. São dois passos, e é importante entender que são
+coisas diferentes:
+
+1. **Cadastrar a turma** (uma vez): marcador, nome, vagas, exige nome da criança.
+   Responde *o que* a aula é.
+2. **Marcar a aula na agenda** (a cada aula): turma + data + início + fim.
+   Responde *quando* a aula acontece.
+
+O passo 2 cria o evento no Google Calendar como `[MARCADOR] Nome da turma`, na data e hora
+escolhidas. O título é **montado pelo código** — a turma vem de uma lista, não de um campo de
+texto —, então não existe o risco de digitar o marcador errado e a aula cair na turma padrão sem
+ninguém perceber.
+
+Confira que o evento volta legível:
+
+```bash
+$T slots     # o horário que você acabou de marcar tem que aparecer aqui
+```
+
+com as vagas e a exigência de nome vindas do cadastro da turma, não do evento.
+
+Guardas do formulário (todas com aviso em português, **status 200**, sem tocar no Google):
+
+- fim antes ou igual ao início;
+- data/hora no passado;
+- data ou hora em branco;
+- turma não cadastrada.
+
+**O que a tela não faz:** remarcar ou apagar uma aula. Para isso, Google Agenda — é lá que os
+horários vivem, e a tela diz isso ao dono.
+
+Ainda na seção, confira o cadastro de turmas:
 
 - A lista mostra as três turmas do piloto, com a padrão destacada.
 - Cadastrar `wod` (minúsculo) salva como `WOD` — o mesmo normalizador da CLI.

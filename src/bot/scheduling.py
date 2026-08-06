@@ -31,6 +31,12 @@ _TITLE_MARKER_PATTERN = re.compile(r"^\s*\[\s*([a-zA-ZÀ-ÿ]+)\s*\]")
 # book the same slot over time.
 BOOKING_SECTION_MARKER = "--- Reservas Corujai ---"
 
+# Written into the description of an event created from the settings screen, so
+# the owner scrolling their calendar knows where it came from. It sits ABOVE the
+# booking section marker that _patch_event_with_booking() appends later, and is
+# never parsed — the class type always comes from the title.
+CREATED_FROM_PANEL_NOTE = "Aula criada pelo painel Corujai."
+
 _WEEKDAY_NAMES_PT = [
     "segunda-feira", "terça-feira", "quarta-feira", "quinta-feira",
     "sexta-feira", "sábado", "domingo",
@@ -131,6 +137,74 @@ def _get_service_or_raise() -> tuple[Any, str]:
         raise IntegrationNeedsReconnectError("Owner must reconnect Google Calendar.") from exc
 
     return service, owner["calendar_id"]
+
+
+def create_class_event(
+    marker: str,
+    start: datetime,
+    end: datetime,
+    tenant_id: str = DEFAULT_TENANT_ID,
+) -> dict:
+    """Create one class occurrence on the owner's Calendar.
+
+    THIS IS THE ONLY events.insert IN THE PROJECT, and it does not weaken the
+    rule it appears to. Google Calendar stays the single source of truth for
+    which slots exist and when: this writes the event and then forgets it, the
+    same way the owner typing into Google Calendar does. Nothing is stored on
+    our side, so there is no second record of availability to drift. What was
+    refused (Module S2, decision 7A) is a *grid* — a recurring rule in Postgres
+    that defines availability and has to generate and reconcile events.
+
+    The title is BUILT, never typed: "[MARKER] Label", both taken from the
+    tenant's registered class type. The marker is what _parse_class_type() reads
+    the event back with — building it removes the whole class of typos that
+    would otherwise silently drop an event into the fallback — and the label is
+    there so the owner reading their own Google Calendar sees a class name
+    ("Crianças"), not just a machine key.
+
+    Args:
+        marker (str): Canonical marker of a class type registered for the
+            tenant. Validated here against class_types, not trusted.
+        start (datetime): Timezone-aware start of the class.
+        end (datetime): Timezone-aware end of the class.
+        tenant_id (str): Tenant whose class types and calendar apply.
+
+    Returns:
+        dict: {"status": "created", "event_id": str, "summary": str,
+        "label": str} on success; {"status": "unknown_class_type"} if the marker
+        is not one of the tenant's; {"status": "integration_not_connected"} or
+        {"status": "needs_reconnect"} if the calendar is unusable.
+    """
+    tenant_types: dict[str, Any] = class_types.load_class_types(tenant_id)
+    if marker not in tenant_types["capacities"]:
+        logger.warning("Refused to create an event for unknown class type '%s'.", marker)
+        return {"status": "unknown_class_type"}
+
+    try:
+        service, calendar_id = _get_service_or_raise()
+    except IntegrationNotConnectedError:
+        return {"status": "integration_not_connected"}
+    except IntegrationNeedsReconnectError:
+        return {"status": "needs_reconnect"}
+
+    summary = f"[{marker}] {tenant_types['labels'][marker]}"
+    event = service.events().insert(
+        calendarId=calendar_id,
+        body={
+            "summary": summary,
+            "description": CREATED_FROM_PANEL_NOTE,
+            "start": {"dateTime": start.isoformat(), "timeZone": str(TIMEZONE)},
+            "end": {"dateTime": end.isoformat(), "timeZone": str(TIMEZONE)},
+        },
+    ).execute()
+
+    logger.info("Class event %s created for tenant %s (%s).", event["id"], tenant_id, summary)
+    return {
+        "status": "created",
+        "event_id": event["id"],
+        "summary": summary,
+        "label": _format_slot_label(start, marker, tenant_types["labels"]),
+    }
 
 
 def get_available_slots(

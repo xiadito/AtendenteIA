@@ -3,6 +3,7 @@ from functools import wraps
 from config import Config
 import logging
 import threading
+from datetime import date, datetime, time
 from whatsapp.whatsapp_service import send_message
 from bot.handlers import handle_text_message
 import bot.ai_configs as ai_configs
@@ -11,6 +12,7 @@ import bot.class_types as class_types
 import bot.confirmations as confirmations
 import bot.messages as messages
 import bot.owner_notifications as owner_notifications
+import bot.scheduling as scheduling
 import bot.session as session_store
 import integrations.store as store
 
@@ -835,6 +837,101 @@ def settings_delete_class_type(marker: str):
 
     notice: dict = {"kind": "success", "text": f"Turma [{marker}] excluída."}
     return render_template("settings.html", **_settings_context(notice)), 200
+
+
+@dashboard_bp.route("/settings/class-events", methods=["POST"])
+@_require_auth
+def settings_create_class_event():
+    """Cria uma aula na agenda a partir de turma + data + horário.
+
+    O dono escolhe a turma numa lista, não digita o marcador: o título do evento
+    é montado pelo código como "[MARCADOR] Aula Experimental". É o que garante
+    que a IA leia o evento de volta como a turma certa — um marcador digitado à
+    mão com erro cairia na turma padrão em silêncio.
+
+    A agenda continua sendo a fonte de verdade dos horários: isto grava o evento
+    lá e não guarda nada do nosso lado. Não é uma grade (decisão 7A) — é o mesmo
+    que o dono digitar no Google Agenda, só que sem sair do painel.
+    """
+    marker: str | None = class_types.normalize_marker(request.form.get("marker", ""))
+    if marker is None:
+        return _settings_error("Escolha a turma da aula.")
+
+    start, end, error = _parse_class_event_window(
+        request.form.get("date", ""),
+        request.form.get("start_time", ""),
+        request.form.get("end_time", ""),
+    )
+    if error is not None:
+        return _settings_error(error)
+
+    result: dict = scheduling.create_class_event(marker, start, end)
+
+    if result["status"] == "unknown_class_type":
+        return _settings_error(f"A turma [{marker}] não está cadastrada.")
+
+    if result["status"] == "integration_not_connected":
+        return _settings_error(
+            "O Google Agenda não está conectado, então não dá para criar a aula. "
+            "Conecte em Configurações → Conta."
+        )
+
+    if result["status"] == "needs_reconnect":
+        return _settings_error(
+            "O Google Agenda precisa ser reconectado antes de criar aulas. "
+            "Reconecte em Configurações → Conta."
+        )
+
+    notice: dict = {
+        "kind": "success",
+        "text": f"Aula criada na agenda: {result['label']}. A IA já pode oferecer esse horário.",
+    }
+    return render_template("settings.html", **_settings_context(notice)), 200
+
+
+def _parse_class_event_window(
+    raw_date: str, raw_start: str, raw_end: str,
+) -> tuple[datetime | None, datetime | None, str | None]:
+    """Valida data + horário de uma aula e devolve o intervalo com fuso.
+
+    Os campos vêm de `<input type="date">` e `<input type="time">`, que o
+    navegador já entrega em ISO — mas o navegador não é a validação: um POST
+    direto manda o que quiser, e a data vira uma chamada à API do Google.
+
+    O fuso é aplicado aqui (America/Sao_Paulo), nunca deixado ingênuo: o
+    servidor roda em UTC no Railway, então um datetime sem fuso viraria uma aula
+    três horas fora do lugar.
+
+    Args:
+        raw_date (str): "2026-08-09".
+        raw_start (str): "18:00".
+        raw_end (str): "19:00".
+
+    Returns:
+        tuple[datetime | None, datetime | None, str | None]: (início, fim, erro).
+        O erro, quando existe, já está em português e pronto para a tela.
+    """
+    try:
+        day: date = date.fromisoformat(raw_date.strip())
+    except ValueError:
+        return None, None, "Informe a data da aula."
+
+    try:
+        start_time: time = time.fromisoformat(raw_start.strip())
+        end_time: time = time.fromisoformat(raw_end.strip())
+    except ValueError:
+        return None, None, "Informe o horário de início e de fim da aula."
+
+    start: datetime = datetime.combine(day, start_time, tzinfo=scheduling.TIMEZONE)
+    end: datetime = datetime.combine(day, end_time, tzinfo=scheduling.TIMEZONE)
+
+    if end <= start:
+        return None, None, "O horário de fim precisa ser depois do de início."
+
+    if start <= datetime.now(scheduling.TIMEZONE):
+        return None, None, "Essa data e hora já passaram. Escolha um horário futuro."
+
+    return start, end, None
 
 
 @dashboard_bp.route("/settings/scheduling", methods=["POST"])

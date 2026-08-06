@@ -267,16 +267,18 @@ class WarningCapture:
 class FakeCalendar:
     """Minimal stand-in for the Calendar API client used by bot/scheduling.py.
 
-    Implements only the three chains scheduling.py actually calls:
-    events().list(...).execute(), events().get(...).execute() and
-    events().patch(...).execute(). Records the arguments it was given so a test
-    can assert on the search window (which is how days_ahead is verified).
+    Implements only the chains scheduling.py actually calls:
+    events().list(...), .get(...), .patch(...) and .insert(...), each ending in
+    .execute(). Records the arguments it was given so a test can assert on the
+    search window (which is how days_ahead is verified) and on the body of a
+    created event (which is how the built title is verified).
     """
 
     def __init__(self, events: list[dict]) -> None:
         self._events = events
         self.last_list_kwargs: dict[str, Any] = {}
         self.patched_bodies: list[dict] = []
+        self.inserted_bodies: list[dict] = []
 
     def events(self) -> "FakeCalendar":
         return self
@@ -294,6 +296,10 @@ class FakeCalendar:
     def patch(self, calendarId: str, eventId: str, body: dict) -> "FakeCall":  # noqa: N803
         self.patched_bodies.append(body)
         return FakeCall({})
+
+    def insert(self, calendarId: str, body: dict) -> "FakeCall":  # noqa: N803
+        self.inserted_bodies.append(body)
+        return FakeCall({"id": f"ev-inserido-{len(self.inserted_bodies)}", **body})
 
 
 class FakeCall:
@@ -887,6 +893,95 @@ class ClassTypesSuite:
 
         return "30 gravado e revertido para 14"
 
+    def test_21_create_class_event_builds_the_title(self) -> str:
+        """Step 21: creating a class writes [MARKER] Label, with the right window.
+
+        The title is the whole point of building it instead of letting the owner
+        type it: _parse_class_type() has to read the event back as the class the
+        owner picked, and a typo would silently drop it into the fallback.
+        """
+        calendar = FakeCalendar([])
+        start = datetime.now(scheduling.TIMEZONE) + timedelta(days=2)
+        end = start + timedelta(hours=1)
+
+        with patched(scheduling, "_get_service_or_raise", lambda: (calendar, "cal")):
+            result = scheduling.create_class_event("KIDS", start, end, SUITE_TENANT)
+
+        expect_equal(result["status"], "created", "status da criação")
+        expect_equal(result["summary"], "[KIDS] Kids", "título montado (marcador + label)")
+
+        body = calendar.inserted_bodies[0]
+        expect_equal(body["summary"], "[KIDS] Kids", "summary enviado ao Google")
+        expect_equal(body["start"]["dateTime"], start.isoformat(), "início enviado ao Google")
+        expect_equal(body["end"]["dateTime"], end.isoformat(), "fim enviado ao Google")
+        expect_equal(body["start"]["timeZone"], "America/Sao_Paulo", "fuso enviado ao Google")
+
+        # The event must round-trip: what was written is what the engine reads.
+        written = _event("ev-novo", body["summary"])
+        reader = FakeCalendar([written])
+        with patched(scheduling, "_get_service_or_raise", lambda: (reader, "cal")):
+            slots = scheduling.get_available_slots(days_ahead=14, tenant_id=SUITE_TENANT)
+
+        expect_equal(slots[0]["class_type"], "KIDS", "turma lida de volta do título criado")
+        expect_equal(slots[0]["requires_child_name"], True, "exigência lida de volta")
+        expect_equal(slots[0]["remaining_slots"], 6, "vagas lidas de volta")
+
+        # An unregistered marker never reaches the Calendar.
+        with patched(scheduling, "_get_service_or_raise", lambda: (calendar, "cal")):
+            refused = scheduling.create_class_event("NAOEXISTE", start, end, SUITE_TENANT)
+        expect_equal(refused["status"], "unknown_class_type", "turma não cadastrada")
+        expect_equal(len(calendar.inserted_bodies), 1, "nada foi criado para turma inexistente")
+
+        return "[KIDS] Kids criado com data/hora e fuso · lido de volta como KIDS/6/exige criança"
+
+    def test_22_class_event_form_validates(self) -> str:
+        """Step 22: the form refuses a bad window before touching the Calendar."""
+        client = self._authenticated_client()
+        calendar = FakeCalendar([])
+
+        future = (datetime.now(scheduling.TIMEZONE) + timedelta(days=3)).date().isoformat()
+        past = (datetime.now(scheduling.TIMEZONE) - timedelta(days=1)).date().isoformat()
+
+        cases: list[tuple[dict[str, str], str]] = [
+            ({"marker": "CRIANCAS", "date": future, "start_time": "19:00", "end_time": "18:00"},
+             "fim antes do início"),
+            ({"marker": "CRIANCAS", "date": future, "start_time": "18:00", "end_time": "18:00"},
+             "fim igual ao início"),
+            ({"marker": "CRIANCAS", "date": past, "start_time": "18:00", "end_time": "19:00"},
+             "data no passado"),
+            ({"marker": "CRIANCAS", "date": "", "start_time": "18:00", "end_time": "19:00"},
+             "data vazia"),
+            ({"marker": "CRIANCAS", "date": future, "start_time": "", "end_time": "19:00"},
+             "hora vazia"),
+            ({"marker": "", "date": future, "start_time": "18:00", "end_time": "19:00"},
+             "turma vazia"),
+            ({"marker": "NAOEXISTE", "date": future, "start_time": "18:00", "end_time": "19:00"},
+             "turma não cadastrada"),
+        ]
+
+        with patched(scheduling, "_get_service_or_raise", lambda: (calendar, "cal")):
+            for data, what in cases:
+                response = client.post("/dashboard/settings/class-events", data=data)
+                expect_equal(response.status_code, 200, f"{what}: status")
+                kind, text = self._notice(response)
+                expect_equal(kind, "error", f"{what}: veio o aviso {text!r}")
+
+            expect_equal(calendar.inserted_bodies, [],
+                         "nenhuma entrada inválida podia ter chegado ao Google")
+
+            # And the valid one does go through.
+            response = client.post("/dashboard/settings/class-events", data={
+                "marker": "criancas", "date": future, "start_time": "18:00", "end_time": "19:00",
+            })
+            kind, text = self._notice(response)
+
+        expect_equal(kind, "success", f"criação válida devolveu {text!r}")
+        expect_equal(len(calendar.inserted_bodies), 1, "a aula válida deveria ter sido criada")
+        expect_equal(calendar.inserted_bodies[0]["summary"], "[CRIANCAS] Crianças",
+                     "título da aula criada pela tela (marcador normalizado de 'criancas')")
+
+        return f"{len(cases)} janelas inválidas recusadas sem tocar no Google · a válida criada"
+
     def test_20_routes_require_auth(self) -> str:
         """Step 20: none of the new routes is reachable without a session."""
         import app as flask_app
@@ -900,6 +995,7 @@ class ClassTypesSuite:
             "/dashboard/settings/class-types/BABY",
             "/dashboard/settings/class-types/BABY/fallback",
             "/dashboard/settings/class-types/BABY/delete",
+            "/dashboard/settings/class-events",
             "/dashboard/settings/scheduling",
         ]
         for path in paths:
@@ -1075,6 +1171,10 @@ def main() -> None:
          suite.test_19_screen_saves_days_ahead),
         ("20", "As rotas novas exigem autenticação",
          suite.test_20_routes_require_auth),
+        ("21", "Marcar aula monta o título [MARCADOR] Nome e volta legível",
+         suite.test_21_create_class_event_builds_the_title),
+        ("22", "Formulário da aula recusa janela inválida sem tocar no Google",
+         suite.test_22_class_event_form_validates),
     ]
     for step, title, test in tests:
         report.run(step, title, test)

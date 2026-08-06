@@ -205,6 +205,61 @@
                 <button type="submit" class="btn-save">Cadastrar turma</button>
             </form>
 
+            {#
+              Criar a aula na agenda sem sair do painel. NÃO é uma grade: grava
+              um evento no Google Calendar e esquece, igualzinho ao dono digitar
+              no Google Agenda. A agenda segue sendo a fonte de verdade dos
+              horários — não guardamos nada disto do nosso lado.
+
+              A turma vem de uma lista, não de um campo de texto: o título do
+              evento é montado pelo código com o marcador certo, então não há
+              como digitar errado e a aula cair na turma padrão sem ninguém ver.
+            #}
+            <form method="POST" action="{{ url_for('dashboard.settings_create_class_event') }}"
+                  class="class-event-form">
+                <h3>Marcar uma aula na agenda</h3>
+
+                {% if class_types %}
+                    <div class="class-event-fields">
+                        <div class="field">
+                            <label for="event_marker">Turma</label>
+                            <select id="event_marker" name="marker" required>
+                                {% for class_type in class_types %}
+                                    <option value="{{ class_type.marker }}">{{ class_type.label }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+
+                        <div class="field">
+                            <label for="event_date">Data</label>
+                            <input type="date" id="event_date" name="date" required>
+                        </div>
+
+                        <div class="field">
+                            <label for="event_start">Início</label>
+                            <input type="time" id="event_start" name="start_time" required>
+                        </div>
+
+                        <div class="field">
+                            <label for="event_end">Fim</label>
+                            <input type="time" id="event_end" name="end_time" required>
+                        </div>
+                    </div>
+
+                    <span class="field-hint">
+                        A aula entra no Google Agenda como <code>[MARCADOR] Nome da turma</code>,
+                        na data e hora escolhidas, e a IA já passa a oferecer esse horário.
+                        Para remarcar ou apagar, use o Google Agenda — é lá que os horários vivem.
+                    </span>
+
+                    <button type="submit" class="btn-save">Marcar aula</button>
+                {% else %}
+                    <p class="empty-note">
+                        Cadastre uma turma acima antes de marcar uma aula.
+                    </p>
+                {% endif %}
+            </form>
+
             <form method="POST" action="{{ url_for('dashboard.settings_save_scheduling') }}"
                   class="scheduling-form">
                 <div class="field">
