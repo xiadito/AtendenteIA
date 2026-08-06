@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Corujai — Configurações</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/theme.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/settings.css') }}">
+</head>
+{#
+  Duas seções, dois formulários, dois POSTs — de propósito. Mudar o telefone do
+  dono não pode reescrever o tom da IA de tabela, e vice-versa.
+
+  Sem HTMX aqui, diferente de /inbox e /bookings: não há lista que mude sozinha,
+  então um form post que redesenha a página é a interação inteira.
+
+  Os textos de ajuda abaixo de cada campo da IA são os mesmos exemplos que a
+  migration 005 semeia entre colchetes no banco. Ficam visíveis (e não como
+  placeholder) porque o campo normalmente está preenchido — um placeholder só
+  apareceria justamente quando o dono não precisa mais dele.
+#}
+<body>
+    <button class="theme-toggle" id="themeBtn" onclick="toggleTheme()">🌙 Escuro</button>
+    <div class="card">
+        <a class="back-link" href="{{ url_for('dashboard.menu') }}">← Menu</a>
+        <h1>Configurações</h1>
+        <p class="subtitle">
+            Ajuste como a atendente virtual se comporta e os dados da sua conta.
+        </p>
+
+        {% if notice %}
+            <div class="notice notice-{{ notice.kind }}">{{ notice.text }}</div>
+        {% endif %}
+
+        <section class="settings-section">
+            <h2>IA</h2>
+            <p class="section-desc">
+                O que a atendente sabe e como ela fala. As mudanças valem já na
+                próxima mensagem que um lead enviar.
+            </p>
+
+            <form method="POST" action="{{ url_for('dashboard.settings_save_ai') }}">
+                <div class="field">
+                    <label for="academy_name">Nome da academia</label>
+                    <input type="text" id="academy_name" name="academy_name"
+                           value="{{ ai_config.academy_name }}" required>
+                    <span class="field-hint">Como a academia é chamada nas conversas.</span>
+                </div>
+
+                <div class="field">
+                    <label for="assistant_name">Nome da atendente</label>
+                    <input type="text" id="assistant_name" name="assistant_name"
+                           value="{{ ai_config.assistant_name }}" required>
+                    <span class="field-hint">O nome com que a IA se apresenta ao lead.</span>
+                </div>
+
+                <div class="field">
+                    <label for="tone">Tom e personalidade</label>
+                    <textarea id="tone" name="tone" rows="3" required>{{ ai_config.tone }}</textarea>
+                    <span class="field-hint">
+                        Ex.: simpática, direta, acolhedora, trata o lead pelo nome.
+                    </span>
+                </div>
+
+                <div class="field">
+                    <label for="business_info">Informações do negócio</label>
+                    <textarea id="business_info" name="business_info" rows="6" required>{{ ai_config.business_info }}</textarea>
+                    <span class="field-hint">
+                        Ex.: modalidades oferecidas (Jiu-Jitsu, CrossFit, musculação),
+                        endereço, horários de funcionamento, valores da mensalidade,
+                        política da aula experimental gratuita.
+                    </span>
+                </div>
+
+                <div class="field">
+                    <label for="flow_emphasis">Ênfase do fluxo</label>
+                    <textarea id="flow_emphasis" name="flow_emphasis" rows="4" required>{{ ai_config.flow_emphasis }}</textarea>
+                    <span class="field-hint">
+                        Ex.: priorizar agendar a aula experimental o quanto antes;
+                        reforçar que a primeira aula é gratuita e sem compromisso.
+                    </span>
+                </div>
+
+                <button type="submit" class="btn-save">Salvar configuração da IA</button>
+            </form>
+        </section>
+
+        <section class="settings-section">
+            <h2>Conta</h2>
+            <p class="section-desc">
+                Seus dados e as conexões da academia.
+            </p>
+
+            <form method="POST" action="{{ url_for('dashboard.settings_save_account') }}">
+                <div class="field">
+                    <label for="owner_phone">Seu WhatsApp</label>
+                    <input type="text" id="owner_phone" name="owner_phone"
+                           value="{{ owner_phone or '' }}"
+                           placeholder="5521999999999" required>
+                    <span class="field-hint">
+                        É para este número que chegam os avisos de agendamento, e é
+                        dele que você responde <strong>1</strong> para confirmar ou
+                        <strong>2</strong> para cancelar. Use DDI + DDD + número.
+                    </span>
+                </div>
+
+                <button type="submit" class="btn-save">Salvar número</button>
+            </form>
+
+            {#
+              Google é só leitura aqui: quem conecta, reconecta e desconecta é a
+              tela de integrações, que já existe desde o Módulo 1. Esta seção
+              mostra o estado e leva até lá.
+            #}
+            <div class="field integration-field">
+                <span class="field-label">Google Calendar</span>
+                <div class="integration-row">
+                    {% if integration_status == 'connected' %}
+                        <span class="tag status-connected">Conectado</span>
+                        {% if google_email %}
+                            <span class="integration-email">{{ google_email }}</span>
+                        {% endif %}
+                    {% elif integration_status == 'needs_reconnect' %}
+                        <span class="tag status-reconnect">Precisa reconectar</span>
+                    {% else %}
+                        <span class="tag status-disconnected">Desconectado</span>
+                    {% endif %}
+                    <a class="integration-link" href="{{ url_for('integrations.google_status') }}">
+                        {% if integration_status == 'connected' %}Gerenciar{% else %}Conectar{% endif %}
+                    </a>
+                </div>
+                <span class="field-hint">
+                    A agenda é de onde a IA tira os horários que oferece ao lead.
+                    Desconectada, a conversa continua — só sem propor horários.
+                </span>
+            </div>
+        </section>
+    </div>
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+</body>
+</html>

@@ -72,17 +72,29 @@ python tests/test_inbox/test_inbox_suite.py
 
 # Module 6 — booking confirmation by the owner (WhatsApp stubbed; fully deterministic)
 python tests/test_confirmation/test_confirmation_suite.py
+
+# Module S1 — settings screen (no network at all: two Postgres rows and the Flask test client)
+python tests/test_settings/test_settings_suite.py
 ```
 
 Each suite prints a PASS/FAIL report and exits non-zero on failure; SKIPs don't fail the run.
 Each module also has a manual CLI (`test_scheduling.py`, `test_ai_action.py`,
-`test_owner_notifications.py`, `test_inbox.py`, `test_confirmation.py`) and a testing roteiro
-(`SCHEDULING_ENGINE_TESTING.md`, `AI_ACTION_TESTING.md`, `OWNER_NOTIFICATIONS_TESTING.md`,
-`INBOX_TESTING.md`, `CONFIRMATION_TESTING.md`).
+`test_owner_notifications.py`, `test_inbox.py`, `test_confirmation.py`, `test_settings.py`)
+and a testing roteiro (`SCHEDULING_ENGINE_TESTING.md`, `AI_ACTION_TESTING.md`,
+`OWNER_NOTIFICATIONS_TESTING.md`, `INBOX_TESTING.md`, `CONFIRMATION_TESTING.md`,
+`SETTINGS_TESTING.md`).
 
 Each suite owns a sender prefix so their teardowns can never collide: `5521000...` (scheduling),
 `5522000...` (AI action), `5523000...` (owner notifications), `5524000...` (inbox),
-`5525000...` (confirmation).
+`5525000...` (confirmation), `5526000...` (settings).
+
+**The settings suite is the one that writes to the pilot's REAL rows.** Every other suite
+creates fixtures under its own prefix; this one cannot, because `ai_configs` and
+`owners.owner_phone` hold one row per tenant and the pilot is the only tenant. It snapshots
+both to `/tmp/corujai_settings_backup.json` before the first write and restores them —
+`updated_at` included — in teardown, repairing an orphaned backup at the start of the next
+run. Never remove that backup step, and never run it with `--keep` on a database you care
+about.
 
 ### Inspecting the database with DBeaver
 
@@ -141,7 +153,9 @@ FROM trial_bookings b
 LEFT JOIN owner_notifications n ON n.booking_id = b.id AND n.event_type = 'booking'
 ORDER BY b.slot_start DESC;
 
--- Set the owner's WhatsApp number (plain digits, no "whatsapp:+") — no UI yet
+-- Set the owner's WhatsApp number (plain digits, no "whatsapp:+"). Since Module S1 the
+-- "Conta" section of /dashboard/settings does this properly — and unlike this bare UPDATE it
+-- normalizes the input and refuses a number that already belongs to a lead. Prefer the screen.
 UPDATE owners SET owner_phone = '5521999999999' WHERE tenant_id = 'default';
 
 -- Notifications queued for the owner, newest first
@@ -342,8 +356,9 @@ before.
 
 Other tables exist but are not touched by `session.py`: `owners` (migration 003, Google
 Calendar credentials + `owner_phone`) and `ai_configs` (migration 005, the customizable prompt
-layer). `products` (migration 002) is grocery-store legacy kept alive only because `sync_agent/`
-reads it. `owner_notifications` (migration 006) is the owner-notification queue — see
+layer) — both now written by the settings screen (Module S1), through
+`store.update_owner_phone()` and `ai_configs.update_ai_config()`. `products` (migration 002) is
+grocery-store legacy kept alive only because `sync_agent/` reads it. `owner_notifications` (migration 006) is the owner-notification queue — see
 Request Flow and `src/tests/test_owner_notifications/OWNER_NOTIFICATIONS_TESTING.md`.
 
 **The `orders` feature was removed entirely.** It went orphan at Module 3 (the AI closes
@@ -407,7 +422,9 @@ definition with its whole rationale in the header, instead of a design spread ov
 
 Editing 001 for Module 5 means the local database (and, at the first real deploy, the
 Railway one too) must be dropped and recreated, not migrated — see the cost below. After
-recreating, set the pilot's number by hand (no UI exists yet):
+recreating, set the pilot's number and AI config from the **"Configurações"** screen
+(Module S1); the hand-run `UPDATE`s below are the fallback for when there is no app running
+yet, and they skip the normalization and the collision guard the screen applies:
 
 ```sql
 UPDATE owners SET owner_phone = '5521999999999' WHERE tenant_id = 'default';
@@ -439,7 +456,8 @@ With the database created from 001–007 this reverts to the normal rule: add a 
   block is full of literal JSON braces.
 - **Customizable layer** (`bot/ai_configs.py` → the `ai_configs` table, per `tenant_id`): gym
   name, attendant name, tone, business info, flow emphasis. **Untrusted input** — framed as
-  data, injected only at fixed points, never allowed to rewrite the prompt. Edited by SQL (no UI).
+  data, injected only at fixed points, never allowed to rewrite the prompt. Edited from the
+  "IA" section of `/dashboard/settings` (Module S1), via `ai_configs.update_ai_config()`.
 
 `build_system_prompt(config, slots, active_bookings, resume_note=False)` assembles protected +
 customizable + available slots + the lead's active bookings. With `resume_note=True` it also
@@ -469,6 +487,9 @@ A password-protected web dashboard is available at `/dashboard/menu`. Routes are
 | `/dashboard/bookings/list` | GET | Partial of the list, target of the decision swap |
 | `/dashboard/bookings/<booking_id>/confirm` | POST | Confirms a trial class |
 | `/dashboard/bookings/<booking_id>/cancel` | POST | Cancels a trial class |
+| `/dashboard/settings` | GET | Settings screen — AI section + account section |
+| `/dashboard/settings/ai` | POST | Saves the customizable prompt layer (`ai_configs`) |
+| `/dashboard/settings/account` | POST | Saves `owners.owner_phone`, behind two guards |
 
 Every route above is behind `@_require_auth`. The four per-sender ones `404` on a number with
 no session (`session.session_exists()`), so a hand-typed URL cannot mint a phantom conversation.
@@ -478,8 +499,10 @@ creating, so an unknown id is answered with a Portuguese notice inside the list.
 `GET /` (in `webhook_bp`) simply redirects to `dashboard.menu` — there is no separate landing
 page. Login redirects to the menu too, so the menu is the single entry point to the UI.
 
-**The dashboard has two data screens**: the inbox (Module 5) and the bookings review (Module 6),
-the first ones since the order list went away with the `orders` feature.
+**The dashboard has two data screens** — the inbox (Module 5) and the bookings review
+(Module 6), the first ones since the order list went away with the `orders` feature — **and
+one configuration screen**, settings (Module S1), which is the first place in the project
+where configuration is written from the UI instead of by hand-run SQL.
 
 **Trap:** the bookings page endpoint is `dashboard.bookings_review`, not `dashboard.bookings`.
 `routes.py` does `import bot.bookings as bookings` at the top, and a view function named
@@ -560,6 +583,54 @@ the queue as unanswered forever.
 
 Testing roteiro: `src/tests/test_confirmation/CONFIRMATION_TESTING.md`.
 
+### Settings Screen (Module S1)
+
+The first module of the SaaS phase, and the first place in the project where configuration is
+**written** from the UI. Until it existed, the AI's personality and the owner's phone number
+were reachable only by hand-run SQL — migration 003 says so in its own header.
+
+**One page, two sections, two POSTs.** `/dashboard/settings` renders "IA" (the five
+`ai_configs` columns) and "Conta" (`owners.owner_phone`, plus the Google Calendar status as
+read-only). They post separately on purpose: an owner fixing a typo in their phone number must
+not rewrite the AI's tone as a side effect of submitting one big form. No HTMX here, unlike the
+other two screens — nothing on the page changes on its own, so a form post that re-renders is
+the whole interaction.
+
+**Nothing is cached, so nothing is invalidated.** `get_ai_config()` reads the row on every
+message (`handlers.py`), which is what lets a save take effect on the very next turn with no
+cache-busting anywhere. The ~60s cache in `ai_context.py` belongs to the Calendar slots and is
+untouched by this screen. Suite test 2 exists to fail loudly if someone later adds a config
+cache without giving the screen a way to clear it.
+
+**`owner_phone` is a routing key, and that is the whole difficulty of this module.**
+`receive_twilio()` calls `store.get_owner_by_phone(clean_number)` on **every** incoming message
+to decide owner-vs-lead. A bad write fails silently in two directions: the owner stops being
+recognized (their `1`/`2` no longer closes bookings), or — worse — someone else's number starts
+being read as the owner's, turning that person's messages into confirmation commands. Hence two
+guards on `POST /settings/account`:
+
+- **(a) Normalize to the webhook's format.** `store.normalize_owner_phone()` is a pure function
+  next to `get_owner_by_phone()`, whose docstring already defined the contract: digits only,
+  10–15 of them (15 is the E.164 ceiling; the floor rejects a truncated paste). It absorbs
+  `whatsapp:`, `+`, spaces, dashes and parentheses.
+- **(b) Refuse a number that is already a `sessions.sender`.** This one queries `sessions`, not
+  `owners`, deliberately: the danger is not two owners sharing a number, it is one number being
+  **lead and owner at once** — routing then has two correct answers, picks the owner's, and
+  hijacks the lead's conversation.
+
+**Where each guard lives, and why.** Normalization sits in `integrations/store.py` (pure, no
+DB); guard (b) sits in a `webhook/routes.py` helper, because checking `sessions` needs
+`bot/session.py` and **nothing under `integrations/` imports `bot/`** — putting it in the store
+would invert the project's dependency direction. `store.update_owner_phone()` is a thin writer
+like its neighbours and assumes an already-clean value.
+
+**No migration, and no `UNIQUE` yet.** The column stays bare `VARCHAR(20)`; guard (b) prevents
+the dangerous case in application code, but the database constraint is S3's job, alongside the
+migration that adds `whatsapp_number`. Both new functions take `tenant_id` as a parameter
+(defaulting to `'default'`), so S3 only has to fill the argument in.
+
+Testing roteiro: `src/tests/test_settings/SETTINGS_TESTING.md`.
+
 ### Google Calendar Integration
 
 `integrations/` implements OAuth 2.0 onboarding for Google Calendar (Module 1). Routes are
@@ -597,13 +668,15 @@ src/static/
 │   ├── integrations.css  ← Google Calendar connection status page
 │   ├── inbox.css         ← inbox conversation list
 │   ├── conversation.css  ← one conversation + reply box
-│   └── bookings.css      ← bookings review list + decision buttons
+│   ├── bookings.css      ← bookings review list + decision buttons
+│   └── settings.css      ← settings screen: the AI and account sections
 └── js/
     └── theme.js          ← shared dark/light theme toggle (all pages)
 ```
 
 Every stylesheet is paired with exactly one **page** template in `src/templates/`
-(`login.html`, `menu.html`, `integrations_google.html`, `inbox.html`, `conversation.html`), all
+(`login.html`, `menu.html`, `integrations_google.html`, `inbox.html`, `conversation.html`,
+`bookings.html`, `settings.html`), all
 of which are rendered by a route. Deleting a template means deleting its stylesheet too — that
 is why removing the order list took `dashboard.html` and `dashboard.css` with it.
 
@@ -675,9 +748,16 @@ Defined in `src/.env` and loaded via `config.py`:
   outcome. Cancelling frees the seat through `count_active_bookings()` alone. **With it the core
   is complete**: lead → AI → booking → notification → takeover → confirmation. See
   `src/tests/test_confirmation/CONFIRMATION_TESTING.md`.
-- **Future** — beyond the core: reminders before the class, a funnel/metrics screen, multi-tenant
-  onboarding (every tenant is still hardcoded to `default`), and a real user model so the
-  dashboard stops being single-password.
+- **Module S1 (done)** — Settings screen (`/dashboard/settings`, `settings.html`), the first
+  module of the SaaS phase. `ai_configs.update_ai_config()` and `store.update_owner_phone()`
+  give the two hand-run `UPDATE`s a UI, and `owner_phone` gains the normalization and the
+  lead-collision guard it never had. No migration and no schema change. See
+  `src/tests/test_settings/SETTINGS_TESTING.md`.
+- **Future (SaaS phase)** — beyond S1: a configurable availability grid (S2), accounts and
+  per-tenant isolation (S3 — the only item that fixes a structural problem, since almost no
+  read filters by `tenant_id` today), a funnel/metrics screen (S4), and billing (S5). Also
+  pending: reminders before the class, and a real user model so the dashboard stops being
+  single-password.
 
 ## Known Issues / TODOs
 
@@ -690,7 +770,15 @@ Defined in `src/.env` and loaded via `config.py`:
   or SSE would be the upgrade, at the cost of the "no build pipeline" simplicity.
 - **The operator inbox is single-user.** Authentication is the one shared
   `DASHBOARD_PASSWORD`, so `author = 'operator'` cannot say *which* human replied, and nothing
-  stops two operators from answering the same lead at once.
+  stops two operators from answering the same lead at once. The settings screen inherits this:
+  whoever holds the password edits both sections, including the owner's own phone number.
+- **`owners.owner_phone` still has no `UNIQUE` constraint.** The column is a routing key —
+  `get_owner_by_phone()` scans it on every incoming message — but it is plain `VARCHAR(20)`,
+  so two tenants could hold the same number and the owner-vs-lead decision would pick one at
+  random. Module S1 added the application-side guards (normalize, and refuse a number that is
+  already a lead in `sessions`), which cover the dangerous case for a single tenant, but the
+  database constraint belongs to **S3**, in the same migration that adds `whatsapp_number`.
+  Adding it will need a duplicate check first, since it runs against a populated table.
 - **Owner notifications are at-least-once, not exactly-once.** `jobs/drain_notifications.py`
   retries a failed send every cron cycle (bounded by `MAX_ATTEMPTS = 5`) with no advisory lock —
   Railway's cron already skips overlapping runs, so a second lock would be redundant, not

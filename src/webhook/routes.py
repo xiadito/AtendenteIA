@@ -5,6 +5,7 @@ import logging
 import threading
 from whatsapp.whatsapp_service import send_message
 from bot.handlers import handle_text_message
+import bot.ai_configs as ai_configs
 import bot.bookings as bookings
 import bot.confirmations as confirmations
 import bot.messages as messages
@@ -530,3 +531,142 @@ def _booking_decision_response(booking_id: str, decision: str):
             notice["text"] += " Não consegui avisar o lead pelo WhatsApp — avise por outro canal."
 
     return render_template("_bookings_list.html", **_bookings_context(notice)), 200
+
+
+#
+# SETTINGS (Module S1)
+#
+# The first write screen for configuration in the project. Until it existed, the
+# AI's personality and the owner's phone number were only reachable by hand-run
+# SQL — migration 003 says so in its own header.
+#
+# ONE PAGE, TWO SECTIONS, TWO POSTS. "IA" edits ai_configs; "Conta" edits
+# owners.owner_phone and shows (read-only) the Google Calendar status. They are
+# separate POSTs because they have nothing to do with each other: an owner
+# fixing a typo in their phone number must not rewrite the AI's tone as a side
+# effect of submitting one big form.
+#
+# No HTMX here, unlike /inbox and /bookings: there is no list that changes on
+# its own, so a plain form post that re-renders the page is the whole
+# interaction.
+#
+
+# The five editable columns of ai_configs, in the order the form shows them.
+# Listed once so the route, the validation and the re-render can't disagree.
+_AI_CONFIG_FIELDS: tuple[str, ...] = (
+    "academy_name",
+    "assistant_name",
+    "tone",
+    "business_info",
+    "flow_emphasis",
+)
+
+
+def _settings_context(notice: dict | None = None, ai_form: dict[str, str] | None = None) -> dict:
+    """Monta o contexto das duas seções da tela de configurações.
+
+    Args:
+        notice (dict | None): Aviso a exibir no topo, como
+            {"kind": "success|warning|error", "text": str}.
+        ai_form (dict[str, str] | None): Valores a mostrar nos campos da IA em vez
+            dos que estão no banco. Serve para um POST recusado devolver o que o
+            dono digitou — recarregar do banco apagaria a edição dele.
+
+    Returns:
+        dict: kwargs para render_template.
+    """
+    owner: dict | None = store.get_owner_credentials()
+    notification_owner: dict | None = store.get_owner_for_notification()
+
+    return {
+        "ai_config": ai_form if ai_form is not None else ai_configs.get_ai_config(),
+        "owner_phone": notification_owner["owner_phone"] if notification_owner else None,
+        "integration_status": owner["integration_status"] if owner else "disconnected",
+        "google_email": owner["google_email"] if owner else None,
+        "notice": notice,
+    }
+
+
+@dashboard_bp.route("/settings")
+@_require_auth
+def settings():
+    """Tela de configurações: personalidade da IA e dados da conta."""
+    return render_template("settings.html", **_settings_context())
+
+
+@dashboard_bp.route("/settings/ai", methods=["POST"])
+@_require_auth
+def settings_save_ai():
+    """Salva a camada customizável do prompt (ai_configs).
+
+    Sobrescreve, sem histórico: a última gravação do dono vale. Não há cache
+    nenhum para invalidar — bot/ai_configs.py lê do banco a cada mensagem —, então
+    a próxima resposta ao lead já sai com o texto novo.
+
+    Os cinco campos são obrigatórios porque todos são interpolados no prompt: um
+    vazio deixaria a IA sem nome, sem tom ou sem os dados do negócio.
+    """
+    submitted: dict[str, str] = {
+        field: request.form.get(field, "").strip() for field in _AI_CONFIG_FIELDS
+    }
+
+    if not all(submitted.values()):
+        notice = {"kind": "error", "text": "Preencha todos os campos da IA antes de salvar."}
+        return render_template("settings.html", **_settings_context(notice, ai_form=submitted)), 200
+
+    if not ai_configs.update_ai_config(**submitted):
+        notice = {"kind": "error", "text": "Não encontrei a configuração desta academia para salvar."}
+        return render_template("settings.html", **_settings_context(notice, ai_form=submitted)), 200
+
+    notice = {"kind": "success", "text": "Configuração da IA salva. Vale a partir da próxima mensagem."}
+    return render_template("settings.html", **_settings_context(notice)), 200
+
+
+@dashboard_bp.route("/settings/account", methods=["POST"])
+@_require_auth
+def settings_save_account():
+    """Salva o telefone do dono, com as duas guardas que protegem o roteamento.
+
+    owner_phone NÃO é um campo de cadastro qualquer: receive_twilio() chama
+    store.get_owner_by_phone() em toda mensagem que entra para decidir se quem
+    escreveu é o dono ou um lead. Gravar errado não mostra erro em lugar nenhum —
+    ou o dono deixa de ser reconhecido (o "1"/"2" dele para de fechar
+    agendamento), ou, pior, o número de outra pessoa passa a ser lido como o do
+    dono e as mensagens dela viram comandos de confirmação.
+
+    Por isso duas guardas antes de gravar:
+      (a) normalizar para o mesmo formato que o webhook compara (só dígitos);
+      (b) recusar um número que já é o de um lead com conversa em `sessions`.
+
+    A guarda (b) consulta `sessions`, e não `owners`, de propósito: o perigo não é
+    haver dois donos com o mesmo número, é um número ser lead e dono ao mesmo
+    tempo — aí o roteamento tem duas respostas certas e escolhe a do dono,
+    sequestrando a conversa do lead. (A unicidade entre donos é assunto da
+    constraint UNIQUE que ainda não existe; ver CLAUDE.md.)
+    """
+    normalized: str | None = store.normalize_owner_phone(request.form.get("owner_phone", ""))
+
+    if normalized is None:
+        notice = {
+            "kind": "error",
+            "text": "Número inválido. Use o formato com DDI e DDD, por exemplo 5521999999999.",
+        }
+        return render_template("settings.html", **_settings_context(notice)), 200
+
+    if session_store.session_exists(normalized):
+        notice = {
+            "kind": "error",
+            "text": (
+                "Esse número já está em uso por uma conversa de lead. "
+                "Salvá-lo como número do dono faria as mensagens dessa pessoa "
+                "virarem confirmações de agendamento. Nada foi alterado."
+            ),
+        }
+        return render_template("settings.html", **_settings_context(notice)), 200
+
+    if not store.update_owner_phone(normalized):
+        notice = {"kind": "error", "text": "Não encontrei o cadastro desta academia para salvar."}
+        return render_template("settings.html", **_settings_context(notice)), 200
+
+    notice = {"kind": "success", "text": "Número do dono salvo."}
+    return render_template("settings.html", **_settings_context(notice)), 200

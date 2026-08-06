@@ -1,0 +1,182 @@
+/* Pareado com templates/settings.html. Um stylesheet por template, como o resto
+   do painel. As classes .card, .back-link, h1, .subtitle e .notice repetem as de
+   bookings.css de propósito: cada tela do painel é autossuficiente, e theme.css
+   guarda só o que é global de verdade (variáveis, body, botão de tema). */
+
+body {
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    padding: 2.5rem 1.5rem;
+    box-sizing: border-box;
+}
+
+.card {
+    background: var(--surface);
+    padding: 2rem;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    width: 100%;
+    max-width: 720px;
+}
+
+.back-link {
+    display: inline-block;
+    margin-bottom: 1rem;
+    font-size: 0.85rem;
+    color: #888;
+    text-decoration: none;
+}
+
+.back-link:hover { color: var(--text); }
+
+h1 {
+    font-size: 1.4rem;
+    color: var(--text);
+    margin: 0 0 0.25rem;
+}
+
+.subtitle {
+    color: var(--text);
+    opacity: 0.65;
+    font-size: 0.88rem;
+    margin: 0 0 1.5rem;
+}
+
+/* Resultado do último salvamento. Fica acima das duas seções porque qualquer uma
+   das duas pode tê-lo produzido. */
+.notice {
+    padding: 0.6rem 0.85rem;
+    border-radius: 6px;
+    font-size: 0.86rem;
+    margin-bottom: 1.5rem;
+}
+
+.notice-success { background: #d4edda; color: #155724; }  /* verde    */
+.notice-warning { background: #fff3cd; color: #856404; }  /* amarelo  */
+.notice-error   { background: #f8d7da; color: #721c24; }  /* vermelho */
+
+/* Os dois blocos da tela. A linha divisória é o que faz "IA" e "Conta" lerem
+   como assuntos separados, que é o ponto de terem formulários separados. */
+.settings-section {
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--input-border);
+}
+
+.settings-section:first-of-type {
+    padding-top: 0;
+    border-top: none;
+}
+
+.settings-section h2 {
+    font-size: 1.05rem;
+    color: var(--text);
+    margin: 0 0 0.25rem;
+}
+
+.section-desc {
+    color: var(--text);
+    opacity: 0.65;
+    font-size: 0.85rem;
+    margin: 0 0 1.25rem;
+}
+
+.field {
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 1.25rem;
+}
+
+.field label,
+.field-label {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 0.35rem;
+}
+
+.field input,
+.field textarea {
+    font-family: inherit;
+    font-size: 0.9rem;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--input-border);
+    border-radius: 6px;
+    padding: 0.55rem 0.7rem;
+    box-sizing: border-box;
+    width: 100%;
+}
+
+.field textarea {
+    resize: vertical;
+    line-height: 1.45;
+}
+
+.field input:focus,
+.field textarea:focus {
+    outline: none;
+    border-color: var(--brand);
+}
+
+.field-hint {
+    font-size: 0.78rem;
+    color: var(--text);
+    opacity: 0.6;
+    margin-top: 0.35rem;
+    line-height: 1.4;
+}
+
+.btn-save {
+    background: var(--brand);
+    color: #ffffff;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: 0.5rem 1.1rem;
+    font-size: 0.88rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s;
+    margin-bottom: 1.5rem;
+}
+
+.btn-save:hover { background: var(--brand-dark); }
+
+/* Status do Google: leitura apenas — quem conecta é a tela de integrações. */
+.integration-field {
+    margin-bottom: 0;
+}
+
+.integration-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+}
+
+.tag {
+    display: inline-block;
+    padding: 0.12rem 0.5rem;
+    border-radius: 12px;
+    font-size: 0.72rem;
+    font-weight: 600;
+}
+
+.status-connected    { background: #d4edda; color: #155724; }  /* verde    */
+.status-reconnect    { background: #fff3cd; color: #856404; }  /* amarelo  */
+.status-disconnected { background: #f0f0f0; color: #666666; }  /* cinza    */
+
+.integration-email {
+    font-size: 0.82rem;
+    opacity: 0.7;
+    overflow-wrap: anywhere;
+}
+
+.integration-link {
+    font-size: 0.82rem;
+    color: var(--brand);
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.integration-link:hover { text-decoration: underline; }

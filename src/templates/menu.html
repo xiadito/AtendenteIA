@@ -32,11 +32,11 @@
                 <span class="menu-desc">Conectar e gerenciar o Google Calendar</span>
             </a>
 
-            <div class="menu-item disabled" aria-disabled="true">
-                <span class="menu-icon">✨</span>
-                <span class="menu-label">Mais features</span>
-                <span class="menu-desc">Em breve</span>
-            </div>
+            <a class="menu-item" href="{{ url_for('dashboard.settings') }}">
+                <span class="menu-icon">⚙️</span>
+                <span class="menu-label">Configurações</span>
+                <span class="menu-desc">Ajustar a atendente virtual e os dados da conta</span>
+            </a>
         </nav>
 
         <a class="logout-link" href="{{ url_for('dashboard.logout') }}">Sair</a>
