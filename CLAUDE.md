@@ -75,18 +75,28 @@ python tests/test_confirmation/test_confirmation_suite.py
 
 # Module S1 — settings screen (no network at all: two Postgres rows and the Flask test client)
 python tests/test_settings/test_settings_suite.py
+
+# Module S2 — class types per tenant (Calendar client faked; fully deterministic)
+python tests/test_class_types/test_class_types_suite.py
 ```
 
 Each suite prints a PASS/FAIL report and exits non-zero on failure; SKIPs don't fail the run.
 Each module also has a manual CLI (`test_scheduling.py`, `test_ai_action.py`,
-`test_owner_notifications.py`, `test_inbox.py`, `test_confirmation.py`, `test_settings.py`)
-and a testing roteiro (`SCHEDULING_ENGINE_TESTING.md`, `AI_ACTION_TESTING.md`,
-`OWNER_NOTIFICATIONS_TESTING.md`, `INBOX_TESTING.md`, `CONFIRMATION_TESTING.md`,
-`SETTINGS_TESTING.md`).
+`test_owner_notifications.py`, `test_inbox.py`, `test_confirmation.py`, `test_settings.py`,
+`test_class_types.py`) and a testing roteiro (`SCHEDULING_ENGINE_TESTING.md`,
+`AI_ACTION_TESTING.md`, `OWNER_NOTIFICATIONS_TESTING.md`, `INBOX_TESTING.md`,
+`CONFIRMATION_TESTING.md`, `SETTINGS_TESTING.md`, `CLASS_TYPES_TESTING.md`).
 
 Each suite owns a sender prefix so their teardowns can never collide: `5521000...` (scheduling),
 `5522000...` (AI action), `5523000...` (owner notifications), `5524000...` (inbox),
-`5525000...` (confirmation), `5526000...` (settings).
+`5525000...` (confirmation), `5526000...` (settings), `5527000...` (class types).
+
+**Two suites overwrite the pilot's own rows** rather than fixture rows, because the tables
+they exercise hold one row per tenant and the screens can only write to `'default'`:
+`test_settings` (`ai_configs`, `owners.owner_phone`) and `test_class_types` (`class_types`,
+`scheduling_configs`). Both snapshot to `/tmp` before the first write, restore in teardown, and
+repair an orphaned backup at the start of the next run. `test_class_types` additionally uses
+fixture tenants prefixed `suite_ct_`, which teardown deletes outright.
 
 **The settings suite is the one that writes to the pilot's REAL rows.** Every other suite
 creates fixtures under its own prefix; this one cannot, because `ai_configs` and
@@ -152,6 +162,21 @@ SELECT b.id, b.lead_name, b.status, n.owner_response, n.sent_at
 FROM trial_bookings b
 LEFT JOIN owner_notifications n ON n.booking_id = b.id AND n.event_type = 'booking'
 ORDER BY b.slot_start DESC;
+
+-- The tenant's class types. NULL capacity = unlimited; is_fallback is the one that catches
+-- events whose title has no recognized [MARKER]. Edited by the "Aulas" section of
+-- /dashboard/settings (Module S2) — prefer the screen, which validates the marker.
+SELECT marker, label, capacity, requires_child_name, is_fallback
+FROM class_types WHERE tenant_id = 'default' ORDER BY marker;
+
+-- A tenant with NO row here is not broken: bot/class_types.py synthesizes an unlimited
+-- fallback in memory so an unmarked event degrades instead of raising. This finds the tenants
+-- relying on that, which is a configuration worth fixing.
+SELECT tenant_id FROM class_types GROUP BY tenant_id
+HAVING COUNT(*) FILTER (WHERE is_fallback) = 0;
+
+-- How far ahead the AI looks for slots
+SELECT tenant_id, days_ahead FROM scheduling_configs;
 
 -- Set the owner's WhatsApp number (plain digits, no "whatsapp:+"). Since Module S1 the
 -- "Conta" section of /dashboard/settings does this properly — and unlike this bare UPDATE it
@@ -339,9 +364,9 @@ JSONB blob carried on the session.
   `child_name`, `qualification`, `is_paused`), not JSONB, so the funnel is explorable with
   plain SQL. Module 5 adds two transient markers, `needs_resume_note` and
   `conversation_started_at`. Indexed by `stage` (`idx_sessions_stage`).
-- `trial_bookings` — one row per trial-class booking (Module 2), with `child_name` for
-  `[BABY]`/`[CRIANCAS]` classes (Module 3 preliminary step), also created complete by
-  migration 004.
+- `trial_bookings` — one row per trial-class booking (Module 2), with `child_name` for class
+  types flagged `requires_child_name` (Module 3 preliminary step; the flag itself moved to
+  `class_types` in Module S2), also created complete by migration 004.
 
 **`sessions.history` is gone.** Until Module 5 the conversation lived in a `jsonb` column
 capped at 10 turns and readable by nothing but the AI. Keeping it alongside `messages` would
@@ -357,7 +382,9 @@ before.
 Other tables exist but are not touched by `session.py`: `owners` (migration 003, Google
 Calendar credentials + `owner_phone`) and `ai_configs` (migration 005, the customizable prompt
 layer) — both now written by the settings screen (Module S1), through
-`store.update_owner_phone()` and `ai_configs.update_ai_config()`. `products` (migration 002) is
+`store.update_owner_phone()` and `ai_configs.update_ai_config()`. `class_types` and
+`scheduling_configs` (migration 008) hold the per-tenant class types and search horizon, owned
+by `bot/class_types.py` — see Class Types per Tenant. `products` (migration 002) is
 grocery-store legacy kept alive only because `sync_agent/` reads it. `owner_notifications` (migration 006) is the owner-notification queue — see
 Request Flow and `src/tests/test_owner_notifications/OWNER_NOTIFICATIONS_TESTING.md`.
 
@@ -396,7 +423,7 @@ with **no DB `CHECK`**, so widening an enum is a code change with no migration (
 `database/migrations/` in filename order, recording each version so it never re-runs.
 There is no ORM — SQLAlchemy/Alembic are deliberately *not* dependencies.
 
-The sequence is **contiguous, 001–007**, and each table is created complete by a single
+The sequence is **contiguous, 001–008**, and each table is created complete by a single
 migration — there are no `ALTER TABLE` follow-ups:
 
 | Version | Creates |
@@ -408,6 +435,7 @@ migration — there are no `ALTER TABLE` follow-ups:
 | `005_create_ai_configs.sql` | `ai_configs` + seeds the `default` tenant config |
 | `006_create_owner_notifications.sql` | `owner_notifications` (the owner-notification queue) + two partial unique indexes (idempotency per `event_type`) + indexes on `status` and `owner_phone` |
 | `007_create_messages.sql` | `messages` (the conversation, FK to `sessions` `ON DELETE CASCADE`) + `(sender, created_at)` and a partial index for the unread count |
+| `008_create_class_types.sql` | `class_types` (per-tenant class types, PK `(tenant_id, marker)`) + a partial unique index for one fallback per tenant, **and** `scheduling_configs` (`days_ahead`); seeds both for the `default` tenant |
 
 **The "never edit an applied migration" rule was suspended while the project was pre-deploy —
 and Module 5 was the last time.** With no database created anywhere, there was no applied
@@ -443,7 +471,13 @@ The cost, in two parts:
   `schema_migrations`; delete it by hand.
 
 With the database created from 001–007 this reverts to the normal rule: add a new numbered
-`.sql` file; never edit an applied one.
+`.sql` file; never edit an applied one. **Migration 008 (Module S2) is the first one written
+under the normal rule** — it adds two new tables and does not touch 001–007.
+
+`008` creates two tables at once, which is a deliberate exception to "one table per migration":
+`class_types` and `scheduling_configs` are one unit of meaning (everything the owner configures
+about scheduling) and were seeded together. The rule that still holds is the one that matters —
+neither table is ever `ALTER`ed by a later migration.
 
 ### Two-Layer System Prompt (Module 3)
 
@@ -451,9 +485,11 @@ With the database created from 001–007 this reverts to the normal rule: add a 
 
 - **Protected layer** (`PROTECTED_LAYER`, immutable, in code): mission, conversation
   milestones (the 8 stages), the `<corujai_action>` block contract, scheduling rules (never
-  offer a time outside the injected list; child classes require `child_name`), the first-message
-  1h timeout notice, and safeguards. It is a **plain string, not an f-string** — the action
-  block is full of literal JSON braces.
+  offer a time outside the injected list; a slot tagged `(exige o nome da criança)` requires
+  `child_name`), the first-message 1h timeout notice, and safeguards. It is a **plain string,
+  not an f-string** — the action block is full of literal JSON braces. Since Module S2 it names
+  **no class marker at all**: which classes are children's classes is per tenant, so the layer
+  points at the per-slot tag that `_render_slots()` writes.
 - **Customizable layer** (`bot/ai_configs.py` → the `ai_configs` table, per `tenant_id`): gym
   name, attendant name, tone, business info, flow emphasis. **Untrusted input** — framed as
   data, injected only at fixed points, never allowed to rewrite the prompt. Edited from the
@@ -487,9 +523,14 @@ A password-protected web dashboard is available at `/dashboard/menu`. Routes are
 | `/dashboard/bookings/list` | GET | Partial of the list, target of the decision swap |
 | `/dashboard/bookings/<booking_id>/confirm` | POST | Confirms a trial class |
 | `/dashboard/bookings/<booking_id>/cancel` | POST | Cancels a trial class |
-| `/dashboard/settings` | GET | Settings screen — AI section + account section |
+| `/dashboard/settings` | GET | Settings screen — AI, classes and account sections |
 | `/dashboard/settings/ai` | POST | Saves the customizable prompt layer (`ai_configs`) |
 | `/dashboard/settings/account` | POST | Saves `owners.owner_phone`, behind two guards |
+| `/dashboard/settings/class-types` | POST | Registers a class type |
+| `/dashboard/settings/class-types/<marker>` | POST | Saves a class type's label, capacity and child-name flag |
+| `/dashboard/settings/class-types/<marker>/fallback` | POST | Makes it the tenant's fallback class type |
+| `/dashboard/settings/class-types/<marker>/delete` | POST | Deletes a class type (never the fallback) |
+| `/dashboard/settings/scheduling` | POST | Saves `days_ahead`, the Calendar search horizon |
 
 Every route above is behind `@_require_auth`. The four per-sender ones `404` on a number with
 no session (`session.session_exists()`), so a hand-typed URL cannot mint a phantom conversation.
@@ -589,12 +630,14 @@ The first module of the SaaS phase, and the first place in the project where con
 **written** from the UI. Until it existed, the AI's personality and the owner's phone number
 were reachable only by hand-run SQL — migration 003 says so in its own header.
 
-**One page, two sections, two POSTs.** `/dashboard/settings` renders "IA" (the five
-`ai_configs` columns) and "Conta" (`owners.owner_phone`, plus the Google Calendar status as
-read-only). They post separately on purpose: an owner fixing a typo in their phone number must
-not rewrite the AI's tone as a side effect of submitting one big form. No HTMX here, unlike the
-other two screens — nothing on the page changes on its own, so a form post that re-renders is
-the whole interaction.
+**One page, several sections, one POST each.** `/dashboard/settings` renders "IA" (the five
+`ai_configs` columns), "Aulas" (`class_types` + `days_ahead`, added by Module S2) and "Conta"
+(`owners.owner_phone`, plus the Google Calendar status as read-only). They post separately on
+purpose: an owner fixing a typo in their phone number must not rewrite the AI's tone as a side
+effect of submitting one big form. "Aulas" takes it further — each class type is its own form
+and "tornar padrão" is its own button, so no single click can both edit a class and change
+which one catches unmarked events. No HTMX here, unlike the other two screens — nothing on the
+page changes on its own, so a form post that re-renders is the whole interaction.
 
 **Nothing is cached, so nothing is invalidated.** `get_ai_config()` reads the row on every
 message (`handlers.py`), which is what lets a save take effect on the very next turn with no
@@ -630,6 +673,76 @@ migration that adds `whatsapp_number`. Both new functions take `tenant_id` as a 
 (defaulting to `'default'`), so S3 only has to fill the argument in.
 
 Testing roteiro: `src/tests/test_settings/SETTINGS_TESTING.md`.
+
+### Class Types per Tenant (Module S2)
+
+The first piece of the SaaS phase that a second gym actually needs. Until S2 the class types
+were two dicts hardcoded at the top of `bot/scheduling.py`, holding the pilot's Jiu-Jitsu
+classes (`CLASS_CAPACITY = {"BABY": 2, "CRIANCAS": 4, "ADULTOS": None}` and
+`CLASS_TYPE_LABELS`). While that was code, a CrossFit box could not exist. Both are gone; the
+source is the `class_types` table, one row per class, per tenant.
+
+**`bot/class_types.py` owns both tables and is the only reader.** `load_class_types(tenant_id)`
+returns a bundle — `capacities` (`dict[str, int | None]`, the old `CLASS_CAPACITY` shape),
+`labels` (the old `CLASS_TYPE_LABELS` shape), `child_name_required` (a `set`), and `fallback`.
+It reads through `get_connection()` with an explicit `tenant_id`, never `flask.g`: the Railway
+cron (`jobs/drain_notifications.py`) calls it outside any request context.
+
+**`NULL` capacity means unlimited, and only `NULL`.** `get_available_slots()` and `book_slot()`
+both test `if capacity is not None and active_count >= capacity`, so `0` or `-1` as a sentinel
+would silently mean "always full". A `CHECK` on the column keeps one from being invented.
+
+**The fallback invariant is the module's central design decision.** `_parse_class_type()` falls
+back for any title without a recognized marker, so a mis-typed event degrades instead of
+blocking bookings — and both `get_available_slots()` and `book_slot()` then look capacity up
+**directly** (`capacities[class_type]`, no `.get`, no default). That was safe while the types
+were a literal; from a table it is not, because a tenant may have no `ADULTOS` row at all and
+the lookup would raise mid-booking. `load_class_types()` therefore guarantees a post-condition:
+
+> `result["fallback"]` is **always** a key of `result["capacities"]`.
+
+resolved in three steps: (1) the row flagged `is_fallback` — the seeded case, so the pilot is
+byte-for-byte what it was; (2) failing that, an existing `ADULTOS` row, pointed at but never
+overwritten; (3) failing that, a synthetic unlimited `ADULTOS` merged into the returned dicts
+and **not** written to the database. Step 3 synthesizes rather than borrowing the tenant's first
+row because borrowing (say) a `BABY` row would make an unmarked event capacity-2 *and* demand a
+child's name — a typo in a title would then block bookings, the exact opposite of the point.
+
+**One read per operation, never per slot.** `get_available_slots()` loads the bundle once before
+its loop over Calendar events; `build_system_prompt()` loads once and passes `labels` into
+`_render_active_bookings()`; `drain_notifications.main()` loads once and passes into
+`_compose_message()`, which runs per pending row. There is deliberately **no TTL cache** — it is
+one indexed read of a handful of rows next to an HTTP round-trip to Google, and a cache would
+only add a window in which the settings screen lies. (Contrast `ai_context.get_cached_slots()`,
+whose cache exists to avoid the Calendar call itself.)
+
+**`requires_child_name` replaced a hardcoded set.** `bot/scheduling.py` used to test
+`class_type in {"BABY", "CRIANCAS"}` in two places, and `PROTECTED_LAYER` told the model in
+fixed text that `[BABY]`/`[CRIANCAS]` were the children's classes. A tenant with a `KIDS` marker
+would have silently skipped the guard. Now the column drives the check, each slot carries
+`requires_child_name`, `_render_slots()` tags those lines with `(exige o nome da criança)`, and
+the protected layer points at that tag instead of naming markers.
+
+**`normalize_marker()` is the single definition of "canonical".** Both the write path (the
+screen) and the read path (`_parse_class_type`, on every event title) call it, so
+`"[ Crianças ]"` in a calendar title and `"crianças"` in the form cannot become two types. It
+refuses anything the title regex (`[a-zA-ZÀ-ÿ]+`) could never match — a marker with a digit or a
+space would be storable but unreadable, a class no event could ever be tagged with.
+
+**`days_ahead` is per tenant** (`scheduling_configs`, default 14). `get_available_slots()` and
+`get_cached_slots()` take `days_ahead: int | None`; `None` reads the tenant's value, an explicit
+argument overrides it without touching the database. The slot cache is keyed by
+`(tenant_id, days_ahead)`.
+
+**Trap:** the handler calls `get_cached_slots()` with **no arguments**, and the Module 3 suite
+replaces that function with `lambda days_ahead=14: [...]` in seven places. Adding an argument at
+the call site breaks every one of those stubs.
+
+The "Aulas" section of `/dashboard/settings` is the write UI. The rules (canonical marker,
+capacity, refusing to delete the fallback) live in `bot/class_types.py`, not in the routes, so
+they hold for SQL and the CLI too.
+
+Testing roteiro: `src/tests/test_class_types/CLASS_TYPES_TESTING.md`.
 
 ### Google Calendar Integration
 
@@ -669,7 +782,7 @@ src/static/
 │   ├── inbox.css         ← inbox conversation list
 │   ├── conversation.css  ← one conversation + reply box
 │   ├── bookings.css      ← bookings review list + decision buttons
-│   └── settings.css      ← settings screen: the AI and account sections
+│   └── settings.css      ← settings screen: the AI, classes and account sections
 └── js/
     └── theme.js          ← shared dark/light theme toggle (all pages)
 ```
@@ -753,11 +866,20 @@ Defined in `src/.env` and loaded via `config.py`:
   give the two hand-run `UPDATE`s a UI, and `owner_phone` gains the normalization and the
   lead-collision guard it never had. No migration and no schema change. See
   `src/tests/test_settings/SETTINGS_TESTING.md`.
-- **Future (SaaS phase)** — beyond S1: a configurable availability grid (S2), accounts and
-  per-tenant isolation (S3 — the only item that fixes a structural problem, since almost no
-  read filters by `tenant_id` today), a funnel/metrics screen (S4), and billing (S5). Also
-  pending: reminders before the class, and a real user model so the dashboard stops being
-  single-password.
+- **Module S2 (done)** — Class types and capacity per tenant (`bot/class_types.py`, migration
+  008, the "Aulas" section of the settings screen). `CLASS_CAPACITY` and `CLASS_TYPE_LABELS`
+  stop being hardcoded and become the `class_types` table, one row per class, per tenant;
+  `days_ahead` becomes configurable too. The hardcoded `{"BABY", "CRIANCAS"}` set becomes a
+  `requires_child_name` column, and `PROTECTED_LAYER` stops naming markers. **With it a second
+  gym is finally representable** — the pilot's behaviour is unchanged, and the Module 2 suite
+  proves it. Scope note: this covers class types, capacity and the search window; a
+  configurable availability **grid** was explicitly deferred, because Google Calendar remains
+  the only source of truth for which slots exist. See
+  `src/tests/test_class_types/CLASS_TYPES_TESTING.md`.
+- **Future (SaaS phase)** — beyond S2: accounts and per-tenant isolation (S3 — the only item
+  that fixes a structural problem, since almost no read filters by `tenant_id` today), a
+  funnel/metrics screen (S4), and billing (S5). Also pending: reminders before the class, and a
+  real user model so the dashboard stops being single-password.
 
 ## Known Issues / TODOs
 
@@ -779,6 +901,18 @@ Defined in `src/.env` and loaded via `config.py`:
   already a lead in `sessions`), which cover the dangerous case for a single tenant, but the
   database constraint belongs to **S3**, in the same migration that adds `whatsapp_number`.
   Adding it will need a duplicate check first, since it runs against a populated table.
+- **A class type's marker also lives in every Calendar event title, and nothing reconciles the
+  two.** Renaming a type means deleting it and creating another (the marker is the key, and
+  `update_class_type()` refuses to touch it) — but the events already in the agenda keep the old
+  `[MARKER]` in their titles, and from then on fall into the tenant's fallback class, silently
+  taking the fallback's capacity. The owner has to edit those titles by hand. Detectable but not
+  detected: nothing warns that a marker in use has no matching row. A "titles referencing an
+  unknown marker" check on the settings screen would close it.
+- **A tenant with no `is_fallback` row runs on a synthetic class type.** `load_class_types()`
+  invents an unlimited `ADULTOS` so an unmarked event degrades instead of raising — correct, and
+  deliberate, but it means a misconfigured tenant works *quietly*. It shows up only as a
+  `WARNING` in the log and a notice in the manual CLI's `show`; the settings screen does not
+  flag it. The diagnostic query is in the DBeaver section.
 - **Owner notifications are at-least-once, not exactly-once.** `jobs/drain_notifications.py`
   retries a failed send every cron cycle (bounded by `MAX_ATTEMPTS = 5`) with no advisory lock —
   Railway's cron already skips overlapping runs, so a second lock would be redundant, not
