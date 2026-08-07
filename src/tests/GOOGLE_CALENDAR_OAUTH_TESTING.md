@@ -10,7 +10,8 @@ testes não precisa ter acompanhado a conversa de desenvolvimento.
 
 ```
 FLASK_SECRET_KEY=<qualquer string aleatória>
-DASHBOARD_PASSWORD=<senha do dashboard>
+DASHBOARD_USER=<seu e-mail — o login do painel desde o Módulo S3a>
+DASHBOARD_PASSWORD=<senha inicial, com 8+ caracteres>
 DATABASE_URL=postgresql://<user>:<senha>@localhost:5432/<banco>
 
 GOOGLE_CLIENT_ID=<Client ID gerado no Google Cloud Console>
@@ -56,7 +57,9 @@ Migrations rodaram com sucesso.
 App created
 ```
 
-Acesse `http://localhost:5000/dashboard/login` e entre com `DASHBOARD_PASSWORD`.
+Acesse `http://localhost:5000/dashboard/login` e entre com **e-mail e senha**. Desde o
+Módulo S3a o login valida contra a tabela `users`; na primeira subida com a tabela vazia, o
+app cria esse usuário a partir de `DASHBOARD_USER`/`DASHBOARD_PASSWORD` (ver README.md).
 
 ## Roteiro de testes
 
