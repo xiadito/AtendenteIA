@@ -541,11 +541,15 @@ class OwnerNotificationsSuite:
 
         calls: dict[str, list] = {"owner": [], "lead": []}
 
-        def fake_owner(owner_phone: str, body: str) -> None:
-            calls["owner"].append((owner_phone, body))
+        # Os dublês recebem TRÊS argumentos desde o Módulo S3a: receive_twilio()
+        # passa o tenant_id resolvido pelo campo "To". O default aqui não é
+        # decoração — sem o terceiro parâmetro estas funções levantariam
+        # TypeError, porque quem passa o argumento é o chamador, não elas.
+        def fake_owner(owner_phone: str, body: str, tenant_id: str = "default") -> None:
+            calls["owner"].append((owner_phone, body, tenant_id))
 
-        def fake_lead(sender: str, body: str) -> None:
-            calls["lead"].append((sender, body))
+        def fake_lead(sender: str, body: str, tenant_id: str = "default") -> None:
+            calls["lead"].append((sender, body, tenant_id))
 
         lead_sender = self.next_sender()
         with patched(routes, "receive_twilio_owner", fake_owner), \
@@ -556,7 +560,16 @@ class OwnerNotificationsSuite:
         expect_equal(len(calls["owner"]), 1, "número do dono deveria cair em receive_twilio_owner")
         expect_equal(len(calls["lead"]), 1, "número desconhecido deveria cair em handle_text_message")
         expect_equal(calls["owner"][0][0], OWNER_PHONE_TEST, "clean_number repassado ao handler do dono")
-        return "roteamento: número do dono → receive_twilio_owner; lead → handle_text_message"
+
+        # Sem "To" no payload nenhum tenant casa, então os dois caem no tenant
+        # padrão — que é exatamente o cenário do Sandbox do Twilio hoje.
+        expect_equal(calls["owner"][0][2], store.DEFAULT_TENANT_ID,
+                     "sem 'To' registrado, o dono deveria ser atribuído ao tenant padrão")
+        expect_equal(calls["lead"][0][2], store.DEFAULT_TENANT_ID,
+                     "sem 'To' registrado, o lead deveria ser atribuído ao tenant padrão")
+
+        return ("roteamento: dono → receive_twilio_owner, lead → handle_text_message, "
+                "ambos no tenant padrão (cenário sandbox)")
 
     # -- teardown -----------------------------------------------------------
 

@@ -42,6 +42,7 @@ from typing import Any, Callable, Iterator
 SRC_DIR = next(p for p in Path(__file__).resolve().parents if p.name == "src")
 sys.path.insert(0, str(SRC_DIR))
 
+import accounts.users as accounts_users  # noqa: E402
 import bot.class_types as class_types  # noqa: E402
 import bot.scheduling as scheduling  # noqa: E402
 import integrations.store as store  # noqa: E402
@@ -218,6 +219,33 @@ def expect_equal(actual: Any, expected: Any, what: str) -> None:
         raise AssertionError(f"{what}: esperado {expected!r}, veio {actual!r}")
 
 
+# Throwaway dashboard account this suite logs in with (Module S3a). Its own
+# email so two suites' teardowns can never delete each other's row; the pilot
+# tenant because users.tenant_id has a foreign key to owners and 'default' is
+# the row every suite already works against.
+SUITE_EMAIL: str = "suite-class-types@suite.corujai.test"
+SUITE_PASSWORD: str = "suite-password-s3a"
+
+
+def _login_suite_user(client: Any) -> None:
+    """Create the suite's user and log the client in through the real route.
+
+    Deliberately NOT forging Flask-Login's private session keys (_user_id,
+    _fresh): they are undocumented, and they would still need a real `users` row
+    for the user_loader to resolve. Going through POST /dashboard/login is
+    honest, version-proof, and exercises the code under test.
+
+    Args:
+        client (Any): A Flask test client.
+    """
+    accounts_users.create_user(SUITE_EMAIL, SUITE_PASSWORD, store.DEFAULT_TENANT_ID)
+    response = client.post(
+        "/dashboard/login",
+        data={"email": SUITE_EMAIL, "password": SUITE_PASSWORD},
+    )
+    expect_equal(response.status_code, 302, "o login da suíte deveria autenticar")
+
+
 @contextlib.contextmanager
 def patched(obj: Any, attr: str, value: Any) -> Iterator[None]:
     """Temporarily set obj.attr = value, restoring the original afterward."""
@@ -389,11 +417,13 @@ class ClassTypesSuite:
     # -- infrastructure -----------------------------------------------------
 
     def _authenticated_client(self) -> Any:
-        """Return a test client with the dashboard session already logged in.
+        """Return a test client already logged into the dashboard.
 
-        Every settings route sits behind @_require_auth, so without this each
-        request would 302 to the login page and the tests would pass on a
-        redirect that never reached the code under test.
+        Since Module S3a the dashboard uses Flask-Login against a real `users`
+        row, so stuffing a boolean into the session authenticates nothing. This
+        creates a throwaway user for the pilot tenant and logs in through the
+        real POST /dashboard/login — more honest than forging Flask-Login's
+        private session keys, and immune to them changing.
         """
         if self.client is None:
             import app as flask_app
@@ -401,8 +431,7 @@ class ClassTypesSuite:
             self.app = flask_app.create_app()
             self.app.config["TESTING"] = True
             self.client = self.app.test_client()
-            with self.client.session_transaction() as flask_session:
-                flask_session["dashboard_authenticated"] = True
+            _login_suite_user(self.client)
         return self.client
 
     @staticmethod
@@ -1021,6 +1050,7 @@ class ClassTypesSuite:
                 cur.execute("DELETE FROM scheduling_configs WHERE tenant_id LIKE %s",
                             (TENANT_PREFIX + "%",))
                 cur.execute("DELETE FROM sessions WHERE sender LIKE %s", (SENDER_PREFIX + "%",))
+                cur.execute("DELETE FROM users WHERE email = %s", (SUITE_EMAIL,))
             conn.commit()
 
         restored = _restore_backup(self._backup)
