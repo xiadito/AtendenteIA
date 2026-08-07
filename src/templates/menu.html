@@ -39,6 +39,10 @@
             </a>
         </nav>
 
+        {# Desde o Módulo S3a o painel sabe QUEM está logado — current_user vem do
+           Flask-Login, registrado como global de template por init_auth(). É a
+           prova visível de que a senha única virou conta de verdade. #}
+        <p class="account-line">{{ current_user.email }}</p>
         <a class="logout-link" href="{{ url_for('dashboard.logout') }}">Sair</a>
     </div>
     <script src="{{ url_for('static', filename='js/theme.js') }}"></script>

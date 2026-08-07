@@ -5,7 +5,7 @@ from flask import Blueprint, redirect, render_template, request, session, url_fo
 
 import integrations.google_calendar as google_calendar
 import integrations.store as store
-from webhook.routes import _require_auth
+from accounts.auth import require_auth
 
 logger = logging.getLogger(__name__)
 
@@ -13,7 +13,7 @@ integrations_bp = Blueprint("integrations", __name__)
 
 
 @integrations_bp.route("/google", methods=["GET"])
-@_require_auth
+@require_auth
 def google_status():
     """Show the current Google Calendar connection status."""
     owner: dict | None = store.get_owner_credentials()
@@ -21,7 +21,7 @@ def google_status():
 
 
 @integrations_bp.route("/google/connect", methods=["GET"])
-@_require_auth
+@require_auth
 def google_connect():
     """Generate the CSRF state, store it in the Flask session and redirect to Google."""
     state: str = secrets.token_urlsafe(32)
@@ -39,7 +39,7 @@ def google_connect():
 
 
 @integrations_bp.route("/google/callback", methods=["GET"])
-@_require_auth
+@require_auth
 def google_callback():
     """Handle Google's OAuth redirect: validate state, exchange code, persist credentials."""
     expected_state: str | None = session.pop("oauth_state", None)
@@ -78,7 +78,7 @@ def google_callback():
 
 
 @integrations_bp.route("/google/disconnect", methods=["POST"])
-@_require_auth
+@require_auth
 def google_disconnect():
     """Revoke the Google token (best-effort) and clear the stored credentials."""
     owner: dict | None = store.get_owner_credentials()
