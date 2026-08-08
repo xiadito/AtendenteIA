@@ -22,6 +22,7 @@
             <p>Conta Google: <strong>{{ owner.google_email }}</strong></p>
             <p>Calendário: <strong>Aulas Experimentais</strong></p>
             <form method="POST" action="{{ url_for('integrations.google_disconnect') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn-action danger">Desconectar</button>
             </form>
         {% elif owner and owner.integration_status == "needs_reconnect" %}

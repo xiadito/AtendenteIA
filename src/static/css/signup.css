@@ -1,0 +1,124 @@
+/* Cadastro público (Módulo S3c).
+   Mesma linguagem do login.css — o cadastro e o login são a mesma porta vista de
+   dois lados — com o cartão um pouco mais largo, porque são quatro campos com
+   rótulo e dica em vez de dois sem nada. Cores só por variável de theme.css. */
+
+body {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    padding: 1.5rem;
+    box-sizing: border-box;
+}
+
+.card {
+    background: var(--surface);
+    padding: 2rem;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    width: 100%;
+    max-width: 420px;
+}
+
+h1 {
+    font-size: 1.2rem;
+    margin: 0 0 0.4rem;
+    color: var(--text);
+    text-align: center;
+}
+
+.subtitle {
+    margin: 0 0 1.5rem;
+    font-size: 0.9rem;
+    opacity: 0.65;
+    text-align: center;
+}
+
+label {
+    display: block;
+    font-size: 0.85rem;
+    margin-bottom: 0.3rem;
+    opacity: 0.85;
+}
+
+input[type="text"],
+input[type="email"],
+input[type="password"] {
+    width: 100%;
+    padding: 0.6rem;
+    margin-bottom: 0.25rem;
+    border: 1px solid var(--input-border);
+    border-radius: 4px;
+    font-size: 1rem;
+    box-sizing: border-box;
+    background: var(--surface);
+    color: var(--text);
+}
+
+input:focus {
+    outline: none;
+    border-color: var(--brand);
+}
+
+.field-hint {
+    display: block;
+    font-size: 0.78rem;
+    opacity: 0.6;
+    margin-bottom: 0.9rem;
+}
+
+/* Sem dica embaixo, o campo precisa do respiro que a dica daria. */
+input[type="text"] + label,
+input[type="password"] + label {
+    margin-top: 0.9rem;
+}
+
+button[type="submit"] {
+    width: 100%;
+    margin-top: 1.2rem;
+    padding: 0.7rem;
+    background-color: var(--brand);
+    color: white;
+    border: none;
+    border-radius: 4px;
+    font-size: 1rem;
+    cursor: pointer;
+}
+
+button[type="submit"]:hover { background-color: var(--brand-dark); }
+
+.error {
+    color: #c0392b;
+    font-size: 0.9rem;
+    margin-bottom: 1rem;
+    text-align: center;
+}
+
+.alt-action {
+    margin: 1.25rem 0 0;
+    font-size: 0.85rem;
+    text-align: center;
+    opacity: 0.75;
+}
+
+.alt-action a {
+    color: var(--brand);
+    text-decoration: none;
+}
+
+.alt-action a:hover { text-decoration: underline; }
+
+/* O HONEYPOT.
+   Escondido de gente, visível para um bot que lê o DOM. Não usa `display: none`
+   nem `hidden`: os dois são o primeiro filtro que qualquer script de spam
+   aplica, e um campo ignorado nunca é preenchido — o que faz a armadilha nunca
+   disparar. Empurrar para fora da tela mantém o campo "real" aos olhos do bot.
+   Ver accounts/signup.py::is_honeypot_filled. */
+.hp-field {
+    position: absolute;
+    left: -9999px;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+}

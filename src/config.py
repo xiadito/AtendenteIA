@@ -31,6 +31,14 @@ class Config:
     DASHBOARD_USER = os.environ.get("DASHBOARD_USER")
     DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD")
 
+    # Public self-service signup (Module S3c). DEFAULTS TO FALSE, and the default
+    # is the whole safety story: whoever forgets to set this is closed, never
+    # open. Turning it on creates a SECOND TENANT the moment somebody signs up,
+    # and until Module S3b merges the reads do not filter by tenant — so every
+    # new gym would see the pilot's conversations and bookings.
+    # DO NOT SET THIS TO true BEFORE S3b.
+    SIGNUP_ENABLED = os.environ.get("SIGNUP_ENABLED", "false").strip().lower() == "true"
+
     #google calendar
     GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
     GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")

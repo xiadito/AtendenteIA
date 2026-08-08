@@ -10,10 +10,11 @@ teste, em `src/tests/`.
 ## Criar a conta de uma academia
 
 Desde o **Módulo S3a** o painel tem contas de verdade: login por e-mail, senha em hash, e cada
-conta dona de um tenant. **Não existe tela de cadastro**, e isso é uma decisão: cada academia
-nova depende de um número de WhatsApp aprovado no Twilio, que é uma etapa manual sua — um
-cadastro aberto criaria contas órfãs, sem número, que nunca recebem mensagem. Contas nascem pela
-linha de comando.
+conta dona de um tenant. Há **dois caminhos** para criar uma:
+
+- **Pela linha de comando** (seções 1 a 3 abaixo), quando você provisiona no lugar do cliente.
+- **Pela tela pública** `/dashboard/signup` (seção 4), em que o próprio dono se cadastra —
+  adicionada pelo Módulo S3c e **desligada por padrão**.
 
 > ### ⛔ Não crie uma segunda conta em produção ainda
 >
@@ -118,7 +119,34 @@ Cuidado com os dois números, que são diferentes e têm papéis diferentes:
 O comando recusa um número que já seja o telefone de algum dono ou que já pertença a uma conversa
 de lead: um número com dois papéis torna o roteamento ambíguo.
 
-### 4. Os outros comandos
+### 4. Ou deixe o próprio cliente se cadastrar
+
+Desde o **Módulo S3c** existe uma tela pública em `/dashboard/signup`: o dono da academia
+preenche nome, e-mail e senha, e a conta nasce com as mesmas cinco tabelas do comando acima.
+Depois de criar, ele cai numa tela de **primeiros passos** que lista o que ainda falta —
+conectar o Google Calendar, descrever a academia para a IA, cadastrar as turmas, e o número de
+WhatsApp, que aparece como *"nossa equipe está preparando"* porque é a etapa que só você resolve.
+
+**A tela vem desligada.** Ligue com:
+
+```bash
+SIGNUP_ENABLED="true"     # no src/.env
+```
+
+> ### ⛔ Não ligue isto em produção antes do Módulo S3b
+>
+> Um cadastro público não corre o risco de criar uma segunda conta — ele **fabrica** segundas
+> contas. E até o S3b as leituras não filtram por tenant: cada academia que se cadastrasse
+> passaria a enxergar as conversas e os agendamentos da Delariva, e vice-versa.
+>
+> Com a flag desligada (o padrão), `/dashboard/signup` responde 404 e o link nem aparece na tela
+> de login. Em banco de desenvolvimento, ligar e testar é seguro.
+
+O formulário se defende sozinho de duas formas: um campo escondido que só um robô preenche, e um
+teto de 5 tentativas por hora, por IP. Nenhum dos dois para alguém determinado — param o script
+que varre formulários pela internet, que é o problema real de um cadastro aberto.
+
+### 5. Os outros comandos
 
 ```bash
 python -m accounts.provision list            # academias e seus logins (nunca o hash)
@@ -126,7 +154,8 @@ python -m accounts.provision reset-password --email … --password -
 ```
 
 Para testar tudo isso sem tocar em produção, veja
-[src/tests/test_accounts/ACCOUNTS_TESTING.md](src/tests/test_accounts/ACCOUNTS_TESTING.md).
+[src/tests/test_accounts/ACCOUNTS_TESTING.md](src/tests/test_accounts/ACCOUNTS_TESTING.md) e
+[src/tests/test_signup/SIGNUP_TESTING.md](src/tests/test_signup/SIGNUP_TESTING.md).
 
 ---
 

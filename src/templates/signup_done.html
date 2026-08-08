@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Corujai — Conta criada</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/theme.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/signup.css') }}">
+</head>
+{#
+  A resposta do honeypot, e SÓ dela. Um cadastro de verdade nunca chega aqui:
+  ele loga a pessoa e redireciona para /dashboard/onboarding.
+
+  Esta página existe para o bot que preencheu o campo escondido receber
+  exatamente o que um humano receberia, sem nada ter sido escrito no banco.
+  Responder um erro, ou um status diferente, ensinaria o próximo bot a pular o
+  campo — que é justamente o que faz a armadilha deixar de funcionar.
+#}
+<body>
+    <button class="theme-toggle" id="themeBtn" onclick="toggleTheme()">🌙 Escuro</button>
+    <div class="card">
+        <h1>Conta criada</h1>
+        <p class="subtitle">
+            Tudo certo. Entre com o e-mail e a senha que você acabou de cadastrar.
+        </p>
+        <p class="alt-action">
+            <a href="{{ url_for('dashboard.login') }}">Ir para o login</a>
+        </p>
+    </div>
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+</body>
+</html>

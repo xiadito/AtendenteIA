@@ -49,6 +49,12 @@ h1 {
     transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
 }
 
+/* O tile de primeiros passos, enquanto houver pendência. Borda na cor da marca
+   para puxar o olho sem virar alerta vermelho — é uma tarefa, não um erro. */
+.menu-item-pending {
+    border-color: var(--brand);
+}
+
 .menu-item:hover {
     border-color: var(--brand);
     transform: translateY(-2px);

@@ -32,6 +32,7 @@
             <div class="error">{{ error }}</div>
         {% endif %}
         <form method="POST" action="{{ url_for('dashboard.login') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input
                 type="email"
                 name="email"
@@ -49,6 +50,23 @@
             />
             <button type="submit">Entrar</button>
         </form>
+
+        {# O link de cadastro renderiza só com SIGNUP_ENABLED ligada: com a flag
+           desligada /dashboard/signup responde 404, e um link para um 404 é pior
+           que link nenhum. #}
+        {% if signup_enabled %}
+            <p class="alt-action">
+                Ainda não tem conta?
+                <a href="{{ url_for('dashboard.signup') }}">Criar a conta da sua academia</a>
+            </p>
+        {% endif %}
+
+        {# Não existe "esqueci minha senha", e isso é honesto em vez de um link
+           quebrado: o projeto não tem canal de e-mail nenhum. A troca é feita
+           por `python -m accounts.provision reset-password`. #}
+        <p class="alt-action alt-muted">
+            Perdeu a senha? Fale com o suporte.
+        </p>
     </div>
     <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
 </body>

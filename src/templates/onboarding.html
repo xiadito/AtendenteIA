@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Corujai — Primeiros passos</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/theme.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/onboarding.css') }}">
+</head>
+{#
+  Primeiros passos (Módulo S3c). Onde o cadastro público aterrissa.
+
+  A LISTA NÃO TEM ESTADO PRÓPRIO. Cada passo é derivado de linhas que já
+  existem — integration_status, os textos-guia de ai_configs, quantas turmas o
+  tenant tem, whatsapp_number. Não há coluna "onboarding_completed", e não deve
+  haver: uma checklist com estado próprio é um segundo registro de um fato que
+  as tabelas já guardam, e os dois divergem. Ver accounts/onboarding.py.
+
+  Sem HTMX: nada nesta página muda sozinho. Ela reflete o banco a cada visita.
+
+  O ÚLTIMO PASSO NÃO TEM BOTÃO de propósito — o número de WhatsApp depende de um
+  Sender aprovado no Twilio, que só o fundador resolve. Dizer isso na tela é o
+  ponto da página: sem essa frase, o dono configura tudo certo e fica sem
+  entender por que a IA não atende ninguém.
+#}
+<body>
+    <button class="theme-toggle" id="themeBtn" onclick="toggleTheme()">🌙 Escuro</button>
+    <div class="card">
+        <a class="back-link" href="{{ url_for('dashboard.menu') }}">← Menu</a>
+        <h1>Bem-vindo ao Corujai</h1>
+        <p class="subtitle">
+            {% if pending %}
+                Falta{{ '' if pending == 1 else 'm' }} {{ pending }}
+                passo{{ '' if pending == 1 else 's' }} para a IA começar a atender.
+            {% else %}
+                Tudo pronto — a IA já pode atender os seus leads.
+            {% endif %}
+        </p>
+
+        <ol class="steps">
+            {% for step in steps %}
+                <li class="step {% if step.done %}step-done{% endif %}">
+                    <span class="step-mark" aria-hidden="true">
+                        {% if step.done %}✓{% else %}○{% endif %}
+                    </span>
+                    <div class="step-body">
+                        <span class="step-title">{{ step.title }}</span>
+                        <span class="step-desc">{{ step.description }}</span>
+                    </div>
+                    {% if step.action_endpoint and not step.done %}
+                        <a class="step-action" href="{{ url_for(step.action_endpoint) }}">
+                            {{ step.action_label }}
+                        </a>
+                    {% elif not step.action_endpoint and not step.done %}
+                        <span class="step-waiting">aguardando</span>
+                    {% endif %}
+                </li>
+            {% endfor %}
+        </ol>
+
+        <a class="menu-link" href="{{ url_for('dashboard.menu') }}">Ir para o painel</a>
+    </div>
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+</body>
+</html>
