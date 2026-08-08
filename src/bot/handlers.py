@@ -61,18 +61,44 @@ _ACTION_BLOCK_PATTERN: re.Pattern[str] = re.compile(
 )
 
 
-def handle_text_message(sender: str, body: str) -> None:
+def handle_text_message(
+    sender: str,
+    body: str,
+    tenant_id: str = store.DEFAULT_TENANT_ID,
+) -> None:
     """Entry point for an incoming WhatsApp text message.
+
+    MODULE S3b SEAM — READ THIS BEFORE FILLING IN THE ARGUMENT.
+
+    `tenant_id` arrives here already resolved from Twilio's "To" field
+    (webhook/routes.py::receive_twilio), and deliberately GOES NO FURTHER. Every
+    read below still runs on its callee's default: get_ai_config(),
+    get_cached_slots(), add_message(), list_active_bookings_by_sender(),
+    get_session(), save_session(), get_owner_for_notification(). Each of those
+    call sites is marked with an `# S3b:` comment.
+
+    Threading it through them is Module S3b's entire job, and doing it here
+    would be a half-isolation that reads as finished: `sessions` has no
+    tenant_id column, `messages`' foreign key is not composite, and
+    `trial_bookings`' UNIQUE is not tenant-scoped. **Until S3b merges, no second
+    account may exist in production** — with 'default' as the only tenant this
+    seam is inert and correct.
 
     Args:
         sender (str): The lead's number, e.g. "5521999999999".
         body (str): The text the lead sent.
+        tenant_id (str): The gym this message was written to. Defaults to the
+            pilot tenant, which keeps every existing caller (the manual CLIs and
+            the test suites) working with two arguments.
     """
     text = body
     # Length, never the text: these messages are whole conversations and the
     # repository is public (see bot/messages.py).
-    logger.info("Handling text message from %s (%d chars).", sender, len(text))
+    logger.info(
+        "Handling text message from %s (%d chars) for tenant %s.", sender, len(text), tenant_id
+    )
 
+    # S3b: pass tenant_id here.
     state: dict = session.get_session(sender)
 
     # 1. Pause check FIRST. A handoff-paused lead is not answered, and this must
@@ -81,6 +107,7 @@ def handle_text_message(sender: str, body: str) -> None:
     #    holding this conversation in the inbox, and everything the lead says
     #    while the bot is silent is exactly what that operator needs to read.
     if state.get("is_paused"):
+        # S3b: pass tenant_id here.
         messages.add_message(sender, "lead", text)
         logger.info("Session for %s is paused (handoff); message stored, AI not called.", sender)
         return
@@ -95,6 +122,9 @@ def handle_text_message(sender: str, body: str) -> None:
     #    The resume note rides along on the single turn after the operator hands
     #    the conversation back, and the marker is cleared right here so it is
     #    delivered exactly once (persisted with the rest of the state in step 7).
+    # S3b: pass tenant_id to all three. get_cached_slots() is the delicate one —
+    # its ~60s cache is keyed by (tenant_id, days_ahead) and seven stubs in
+    # tests/test_ai_action replace it with a no-argument lambda.
     config = ai_configs.get_ai_config()
     slots = get_cached_slots()
     active_bookings = bookings.list_active_bookings_by_sender(sender)
@@ -105,6 +135,7 @@ def handle_text_message(sender: str, body: str) -> None:
     # 4. Record the lead's message, then replay the recent window to the AI.
     #    The window is bounded by conversation_started_at, so a conversation the
     #    timeout restarted does not get the previous one replayed into it.
+    # S3b: pass tenant_id here.
     messages.add_message(sender, "lead", text)
     recent = messages.get_recent_messages(
         sender,
@@ -153,6 +184,7 @@ def handle_text_message(sender: str, body: str) -> None:
     #    the operator will read in the inbox, and it keeps the action block out
     #    of the next turn's token budget. Born read — an outgoing message is
     #    nothing for the operator to catch up on.
+    # S3b: pass tenant_id to both.
     session.save_session(sender, state)
     messages.add_message(sender, "ai", outgoing, is_read=True)
 
@@ -162,6 +194,7 @@ def handle_text_message(sender: str, body: str) -> None:
     #     A failure here must never stop the reply from reaching the lead.
     if notification_event is not None:
         try:
+            # S3b: pass tenant_id here.
             owner = store.get_owner_for_notification()
             if owner is None or not owner.get("owner_phone"):
                 logger.warning("Owner has no owner_phone configured; skipping notification for %s.", sender)

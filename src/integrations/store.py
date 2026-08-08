@@ -143,6 +143,151 @@ def get_owner_by_phone(owner_phone: str) -> dict | None:
     return dict(row) if row else None
 
 
+def get_owner_by_phone_in_tenant(owner_phone: str, tenant_id: str) -> dict | None:
+    """Ask the same question as get_owner_by_phone(), but INSIDE one tenant.
+
+    THE DIFFERENCE IS THE WHOLE POINT OF MODULE S3a. get_owner_by_phone() scans
+    every tenant, which was correct while exactly one existed. Once each gym has
+    its own inbound number, the right question is no longer "is this number some
+    owner's?" but "is this number the owner of the gym this message was written
+    TO?" — because with a global scan, gym B's owner writing to gym A's number
+    would be routed to the owner handler and their "1" would confirm one of gym
+    A's bookings.
+
+    Args:
+        owner_phone (str): Plain-digit number, as clean_number in
+            webhook/routes.py.
+        tenant_id (str): The tenant already resolved from the message's "To".
+
+    Returns:
+        dict | None: {id, tenant_id, owner_phone} if this number is THAT
+        tenant's owner, else None (anyone else is a lead of that tenant).
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, tenant_id, owner_phone
+                FROM owners
+                WHERE owner_phone = %s AND tenant_id = %s
+                """,
+                (owner_phone, tenant_id),
+            )
+            row = cur.fetchone()
+
+    return dict(row) if row else None
+
+
+def find_tenant_by_whatsapp_number(to: str | None) -> str | None:
+    """Identify which tenant an inbound message was written TO.
+
+    `to` is Twilio's "To" field: the gym's own WhatsApp number. Since each gym
+    gets its own number, that field is the tenant routing key.
+
+    Returns None rather than a default on purpose — the caller has to be able to
+    tell "this number belongs to gym X" from "no gym has claimed this number",
+    because the two lead to genuinely different routing. resolve_tenant_by_
+    whatsapp_number() is the wrapper for callers that just want an answer.
+
+    Args:
+        to (str | None): The raw "To" field, e.g. "whatsapp:+14155238886".
+
+    Returns:
+        str | None: The tenant that owns this number, or None if it is missing,
+        unparseable, or registered to nobody.
+    """
+    number: str | None = normalize_owner_phone(to)
+    if number is None:
+        return None
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT tenant_id FROM owners WHERE whatsapp_number = %s",
+                (number,),
+            )
+            row = cur.fetchone()
+
+    return row["tenant_id"] if row else None
+
+
+def resolve_tenant_by_whatsapp_number(to: str | None) -> str:
+    """Resolve a tenant from an inbound "To", degrading to the pilot tenant.
+
+    THE FALLBACK IS THE SANDBOX, and it is why the pilot keeps working. The
+    Twilio Sandbox gives every gym the SAME inbound number, so no tenant can
+    claim it and `owners.whatsapp_number` stays NULL everywhere — meaning this
+    function currently always returns DEFAULT_TENANT_ID, which is exactly what
+    every call in the project defaulted to before S3a. Nothing observable
+    changes until real numbers arrive, and the correct shape is already in
+    place for when they do.
+
+    It never blocks a message. An unrecognized number is a configuration gap,
+    not a reason to drop a lead.
+
+    Args:
+        to (str | None): The raw "To" field.
+
+    Returns:
+        str: The resolved tenant, or DEFAULT_TENANT_ID with a WARNING logged.
+    """
+    tenant_id: str | None = find_tenant_by_whatsapp_number(to)
+
+    if tenant_id is not None:
+        return tenant_id
+
+    # Only the last four digits are logged. A gym's business line is less
+    # sensitive than a lead's personal number, but the rule that this public
+    # repository never logs a whole number should not acquire an exception.
+    digits: str | None = normalize_owner_phone(to)
+    logger.warning(
+        "No tenant registered for the destination number ending in %s; using '%s'.",
+        digits[-4:] if digits else "?",
+        DEFAULT_TENANT_ID,
+    )
+    return DEFAULT_TENANT_ID
+
+
+def update_whatsapp_number(
+    whatsapp_number: str | None,
+    tenant_id: str = DEFAULT_TENANT_ID,
+) -> bool:
+    """Store (or clear) the gym's own inbound WhatsApp number.
+
+    Thin writer, like its neighbours: it assumes the value is ALREADY normalized
+    and already checked for the two-roles collision. Those guards live in
+    accounts/provision.py::set_whatsapp_number(), because checking `sessions`
+    needs bot/ and nothing under integrations/ imports bot/.
+
+    Args:
+        whatsapp_number (str | None): Plain digits, or None to clear it.
+        tenant_id (str): Tenant identifier.
+
+    Returns:
+        bool: True if a row was updated, False if the tenant has no owners row.
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE owners
+                SET whatsapp_number = %s,
+                    updated_at = NOW()
+                WHERE tenant_id = %s
+                """,
+                (whatsapp_number, tenant_id),
+            )
+            updated: bool = cur.rowcount > 0
+            conn.commit()
+
+    if updated:
+        logger.info("WhatsApp number updated for tenant %s.", tenant_id)
+    else:
+        logger.warning("No owners row to update for tenant '%s'.", tenant_id)
+
+    return updated
+
+
 def normalize_owner_phone(raw: str | None) -> str | None:
     """Reduce a typed-in phone number to the exact format the webhook compares against.
 

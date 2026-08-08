@@ -2,6 +2,21 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> ## ⛔ Do not create a second account in production until S3b merges
+>
+> Module S3a gave the project accounts, login and tenant provisioning. It did **not** give it
+> read isolation. `sessions` has no `tenant_id` column, `messages`' foreign key is not composite,
+> `trial_bookings`' `UNIQUE` is not tenant-scoped, and `get_session()`, `get_conversation()`,
+> `list_conversations()`, `count_unread()`, `list_bookings_for_review()` and
+> `list_pending_notifications()` still read every tenant's rows. A second tenant would see the
+> pilot's conversations and bookings, and the pilot would see theirs.
+>
+> **Not even the founder's own test account.** With `'default'` as the only tenant, S3a in
+> production is safe and behaves exactly as it did before.
+>
+> On a development database, `python -m accounts.provision` is safe — a second tenant is exactly
+> what `tests/test_accounts` creates.
+
 ## Development Commands
 
 The app runs from the `src/` directory, but `requirements.txt` lives at the **repo root**:
@@ -78,18 +93,37 @@ python tests/test_settings/test_settings_suite.py
 
 # Module S2 — class types per tenant (Calendar client faked; fully deterministic)
 python tests/test_class_types/test_class_types_suite.py
+
+# Module S3a — accounts, login and tenant provisioning (no network at all)
+python tests/test_accounts/test_accounts_suite.py
 ```
 
 Each suite prints a PASS/FAIL report and exits non-zero on failure; SKIPs don't fail the run.
 Each module also has a manual CLI (`test_scheduling.py`, `test_ai_action.py`,
 `test_owner_notifications.py`, `test_inbox.py`, `test_confirmation.py`, `test_settings.py`,
-`test_class_types.py`) and a testing roteiro (`SCHEDULING_ENGINE_TESTING.md`,
+`test_class_types.py`, `test_accounts.py`) and a testing roteiro (`SCHEDULING_ENGINE_TESTING.md`,
 `AI_ACTION_TESTING.md`, `OWNER_NOTIFICATIONS_TESTING.md`, `INBOX_TESTING.md`,
-`CONFIRMATION_TESTING.md`, `SETTINGS_TESTING.md`, `CLASS_TYPES_TESTING.md`).
+`CONFIRMATION_TESTING.md`, `SETTINGS_TESTING.md`, `CLASS_TYPES_TESTING.md`,
+`ACCOUNTS_TESTING.md`).
 
 Each suite owns a sender prefix so their teardowns can never collide: `5521000...` (scheduling),
 `5522000...` (AI action), `5523000...` (owner notifications), `5524000...` (inbox),
-`5525000...` (confirmation), `5526000...` (settings), `5527000...` (class types).
+`5525000...` (confirmation), `5526000...` (settings), `5527000...` (class types),
+`5528000...` (accounts).
+
+**Since Module S3a every suite that drives the dashboard creates its own `users` row and logs in
+through the real `POST /dashboard/login`.** Stuffing `session["dashboard_authenticated"] = True`
+no longer authenticates anything. Each one owns an email on `@suite.corujai.test`
+(`suite-settings@`, `suite-inbox@`, `suite-confirmation@`, `suite-class-types@`) so two teardowns
+can never delete each other's row, and each deletes only its own. Forging Flask-Login's private
+session keys (`_user_id`, `_fresh`) was rejected: they are undocumented, and they would still
+need a real `users` row for the `user_loader` to resolve.
+
+**`test_accounts` is the first suite with NO `/tmp` backup, deliberately.** It never writes to the
+pilot: every scenario runs on fixture tenants that `provision_tenant()` builds under the prefix
+`suite-s3a-`. `_drop_orphan_fixtures()`, called at the start of `main()`, plays the crash-repair
+role the backup file plays elsewhere. Don't "restore" the missing backup step — there is nothing
+of the pilot's to restore.
 
 **Two suites overwrite the pilot's own rows** rather than fixture rows, because the tables
 they exercise hold one row per tenant and the screens can only write to `'default'`:
@@ -130,8 +164,24 @@ Three settings that save real time:
 Queries worth keeping in a saved SQL editor:
 
 ```sql
--- Migration history: 001-007, all seven present
+-- Migration history: 001-009, all nine present
 SELECT version FROM schema_migrations ORDER BY version;
+
+-- Who can log into the dashboard, and which gym they own (Module S3a).
+-- password_hash is never selected here on purpose: it is a secret, and a hash
+-- pasted into a ticket is still a hash somebody can attack offline.
+SELECT id, email, tenant_id, created_at FROM users ORDER BY id;
+
+-- The two routing keys, side by side. They are DIFFERENT numbers with different
+-- jobs: whatsapp_number is the gym's own Twilio line (the "To" — which gym was
+-- this written to?), owner_phone is the owner's personal line (the "From" — is
+-- this the owner replying 1/2, or a lead?). A tenant whose whatsapp_number is
+-- NULL receives nothing of its own: every message falls back to 'default'.
+SELECT tenant_id, whatsapp_number, owner_phone FROM owners ORDER BY tenant_id;
+
+-- ⛔ MORE THAN ONE ROW HERE IN PRODUCTION IS THE ALARM. Until S3b merges, the
+-- reads do not filter by tenant, so a second tenant sees the pilot's data.
+SELECT tenant_id FROM owners;
 
 -- Funnel state per lead (why the state lives in columns, not JSONB)
 SELECT sender, stage, lead_name, child_name, qualification, is_paused, updated_at
@@ -208,8 +258,11 @@ appear in a row.
 ### Dependencies
 
 `requirements.txt` is a **curated** pinned list: the 10 packages the code actually imports
-(Flask, gunicorn, python-dotenv, openai, twilio, psycopg2-binary, requests,
+(Flask, Flask-Login, gunicorn, python-dotenv, openai, twilio, psycopg2-binary, requests,
 google-api-python-client, google-auth-oauthlib, google-auth) plus their transitive closure.
+**Flask-Login (Module S3a) drags in nothing** beyond Flask and Werkzeug, both already pinned —
+and password hashing uses `werkzeug.security` (scrypt) rather than adding passlib, for the same
+reason: Werkzeug is already there.
 Do **not** regenerate it with a bare `pip freeze > requirements.txt` — that pulls back in
 every experiment left in the venv. When adding a dependency, append the pin plus whatever
 it drags in.
@@ -226,8 +279,11 @@ This is **Corujai**, a **WhatsApp chatbot focused on closing leads** for gyms (J
 ```
 Twilio POST /webhook
   → webhook/routes.py::receive_twilio()
-    → integrations/store.py::get_owner_by_phone()  (owner reply? route to receive_twilio_owner() instead)
-    → bot/handlers.py::handle_text_message()
+    → integrations/store.py::find_tenant_by_whatsapp_number(To)   (which gym? — Module S3a)
+        ├─ None  → SANDBOX path: tenant 'default' + the global get_owner_by_phone() scan
+        └─ tenant → ROUTED path: get_owner_by_phone_in_tenant() — owner-vs-lead INSIDE that gym
+    → (owner reply? route to receive_twilio_owner(…, tenant_id=…) instead)
+    → bot/handlers.py::handle_text_message(…, tenant_id=…)   (received, NOT propagated — S3b)
       → bot/session.py           (Postgres-backed conversation state)
       → bot/messages.py          (records the lead's message — ALSO when paused, then returns)
       → bot/ai_configs.py        (per-tenant customizable prompt layer)
@@ -423,8 +479,10 @@ with **no DB `CHECK`**, so widening an enum is a code change with no migration (
 `database/migrations/` in filename order, recording each version so it never re-runs.
 There is no ORM — SQLAlchemy/Alembic are deliberately *not* dependencies.
 
-The sequence is **contiguous, 001–008**, and each table is created complete by a single
-migration — there are no `ALTER TABLE` follow-ups:
+The sequence is **contiguous, 001–009**. Each table is created complete by a single migration,
+with one deliberate exception: **migration 009 alters `owners` twice** (Module S3a), because
+`whatsapp_number` did not exist as a concept until the one-number-per-gym decision and 003 was
+already applied everywhere. Everything else still holds the property.
 
 | Version | Creates |
 |---|---|
@@ -436,6 +494,7 @@ migration — there are no `ALTER TABLE` follow-ups:
 | `006_create_owner_notifications.sql` | `owner_notifications` (the owner-notification queue) + two partial unique indexes (idempotency per `event_type`) + indexes on `status` and `owner_phone` |
 | `007_create_messages.sql` | `messages` (the conversation, FK to `sessions` `ON DELETE CASCADE`) + `(sender, created_at)` and a partial index for the unread count |
 | `008_create_class_types.sql` | `class_types` (per-tenant class types, PK `(tenant_id, marker)`) + a partial unique index for one fallback per tenant, **and** `scheduling_configs` (`days_ahead`); seeds both for the `default` tenant |
+| `009_create_users.sql` | `users` (dashboard accounts, `email` UNIQUE, FK `tenant_id → owners` `ON DELETE CASCADE`) + `idx_users_tenant_id`; **alters** `owners` to add `whatsapp_number`, plus unique indexes on `whatsapp_number` and on `owner_phone` (the one S1 deferred). **No seed** — a password hash must not live in a public repo, so the first user is created at runtime by `accounts/bootstrap.py` |
 
 **The "never edit an applied migration" rule was suspended while the project was pre-deploy —
 and Module 5 was the last time.** With no database created anywhere, there was no applied
@@ -476,8 +535,27 @@ under the normal rule** — it adds two new tables and does not touch 001–007.
 
 `008` creates two tables at once, which is a deliberate exception to "one table per migration":
 `class_types` and `scheduling_configs` are one unit of meaning (everything the owner configures
-about scheduling) and were seeded together. The rule that still holds is the one that matters —
-neither table is ever `ALTER`ed by a later migration.
+about scheduling) and were seeded together.
+
+**`009` (Module S3a) is the first migration that `ALTER`s an existing table**, and the note above
+was amended rather than quietly contradicted. It adds `owners.whatsapp_number` and two unique
+indexes. Two things about it are worth copying:
+
+- **Never write `ADD CONSTRAINT`. Write `CREATE UNIQUE INDEX IF NOT EXISTS`.** Postgres has no
+  `IF NOT EXISTS` for `ADD CONSTRAINT`, so a re-run of the file would abort — and idempotence is
+  a hard requirement here, not a style, because `version` is the filename stem and a rename
+  silently re-runs the file. A unique index enforces the same uniqueness, allows the same
+  multiple `NULL`s, and is inferrable by `ON CONFLICT (col)`. `ADD COLUMN IF NOT EXISTS` does
+  exist and is safe. (008 already used the idiom for `idx_class_types_one_fallback_per_tenant`.)
+- **The `owner_phone` unique index runs against a populated table.** Check for duplicates first:
+
+  ```sql
+  SELECT owner_phone, COUNT(*) FROM owners
+  WHERE owner_phone IS NOT NULL GROUP BY 1 HAVING COUNT(*) > 1;
+  ```
+
+  If 009 raises, `init_db()` propagates the exception, `create_app()` **only prints it**, and the
+  app boots with no `users` table — every login 500s and the failure looks nothing like its cause.
 
 ### Two-Layer System Prompt (Module 3)
 
@@ -506,12 +584,12 @@ integration exceptions into an empty list so a disconnected calendar never break
 
 ### Dashboard
 
-A password-protected web dashboard is available at `/dashboard/menu`. Routes are defined in `webhook/routes.py` under `dashboard_bp`:
+A login-protected web dashboard is available at `/dashboard/menu`. Routes are defined in `webhook/routes.py` under `dashboard_bp`:
 
 | Route | Method | Description |
 |---|---|---|
-| `/dashboard/login` | GET/POST | Password login form |
-| `/dashboard/logout` | GET | Clears session, redirects to login |
+| `/dashboard/login` | GET/POST | Email + password login, validated against `users` |
+| `/dashboard/logout` | GET | Ends the login session, redirects to login |
 | `/dashboard/menu` | GET | Post-login navigation hub (inbox, integrations, future features) |
 | `/dashboard/inbox` | GET | Conversation list — paused and unread first |
 | `/dashboard/inbox/conversations` | GET | Partial of the list, HTMX polling target |
@@ -533,7 +611,9 @@ A password-protected web dashboard is available at `/dashboard/menu`. Routes are
 | `/dashboard/settings/class-events` | POST | Creates one class on the Calendar (class + date + start/end) |
 | `/dashboard/settings/scheduling` | POST | Saves `days_ahead`, the Calendar search horizon |
 
-Every route above is behind `@_require_auth`. The four per-sender ones `404` on a number with
+Every route above is behind `@require_auth` (Flask-Login's `login_required`, re-exported from
+`accounts/auth.py` — see Accounts below; before Module S3a this was a home-grown `_require_auth`
+in this file, which `integrations/routes.py` imported by its private name). The four per-sender ones `404` on a number with
 no session (`session.session_exists()`), so a hand-typed URL cannot mint a phantom conversation.
 The two booking POSTs need no such guard: `bookings.get_booking()` returns `None` rather than
 creating, so an unknown id is answered with a Portuguese notice inside the list.
@@ -545,6 +625,9 @@ page. Login redirects to the menu too, so the menu is the single entry point to 
 (Module 6), the first ones since the order list went away with the `orders` feature — **and
 one configuration screen**, settings (Module S1), which is the first place in the project
 where configuration is written from the UI instead of by hand-run SQL.
+
+**There is no account screen, and there will not be one soon.** Creating a gym is a command
+(`python -m accounts.provision`), and so is resetting a password. See Accounts below for why.
 
 **Trap:** the bookings page endpoint is `dashboard.bookings_review`, not `dashboard.bookings`.
 `routes.py` does `import bot.bookings as bookings` at the top, and a view function named
@@ -764,6 +847,149 @@ lives, and the screen says so. See Known Issues.
 
 Testing roteiro: `src/tests/test_class_types/CLASS_TYPES_TESTING.md`.
 
+### Accounts and Tenant Provisioning (Module S3a)
+
+The module that made a second gym *creatable*. Until it existed there was no account at all:
+"logged in" was `session["dashboard_authenticated"] = True`, set by comparing the submitted
+password against `Config.DASHBOARD_PASSWORD` in plain text. One password, one gym, no identity.
+
+**`accounts/` is a new package, peer to `bot/` and `integrations/`.** It has to be:
+`provision_tenant()` writes `owners` (owned by `integrations/store.py`) **and** `ai_configs`,
+`class_types`, `scheduling_configs` (owned by `bot/`), and the rule that *nothing under
+`integrations/` imports `bot/`* rules that package out. `webhook/` is the HTTP layer, and the
+provisioning CLI must run with no Flask at all. Same reasoning that put `jobs/` where it is.
+
+| File | Responsibility |
+|---|---|
+| `accounts/users.py` | The `users` table. `normalize_email()` (the one definition of canonical), `create_user()`, `authenticate()`. No Flask. |
+| `accounts/tenants.py` | Slug generation and collision handling. Pure, plus one `owners` lookup. No Flask. |
+| `accounts/provision.py` | `provision_tenant()` in a single transaction, and the `python -m accounts.provision` CLI. No Flask. |
+| `accounts/auth.py` | **The only Flask-aware file.** `LoginManager`, `User(UserMixin)`, `user_loader`, and `require_auth`. |
+| `accounts/bootstrap.py` | `bootstrap_first_user()`, called once from `create_app()`. |
+
+**Authentication is Flask-Login plus `werkzeug.security` (scrypt).** Flask-Login is the only new
+dependency; Werkzeug was already a Flask transitive, so passlib was not added. `require_auth` is
+the project's single name for the decorator and is imported by both route files — which also
+removed the `integrations/routes.py → webhook/routes.py` edge that used to drag `bot/` in
+transitively.
+
+Three settings in `init_auth()` are decisions, not defaults: `login_message = None` (login.html
+renders no flashes, so Flask-Login's default would pile them up in the cookie forever),
+`session_protection = "basic"` not `"strong"` (`"strong"` drops the session when IP/user-agent
+changes, which would break the Google OAuth round-trip behind Railway's proxy — a documented rare
+failure would become routine), and **no remember-me** (session cookie only, same lifetime as the
+boolean it replaced).
+
+**`current_user.tenant_id` is the S3b seam.** Every protected route can read it; **no read filters
+by it yet.**
+
+**Login is deliberately unhelpful about failures.** One message for a wrong email and a wrong
+password, and `authenticate()` compares against a module-level dummy hash when the email does not
+exist, so the response time does not leak which addresses are registered either. `?next=` is
+ignored — honouring it means validating same-origin, and getting that wrong is an open redirect.
+
+**`provision_tenant()` breaks the house pattern on purpose: one connection, one transaction, one
+commit.** Every other writer opens and commits its own, and reusing five of them here would make
+a partial tenant possible — which is worse than no tenant, because it works *quietly wrong*:
+`ai_configs.update_ai_config()` is an `UPDATE`, not an upsert, so a tenant without that row lets
+its owner save the AI section forever while the call returns `False`; and a tenant with no
+`class_types` rows runs on the unlimited fallback `load_class_types()` synthesizes in memory,
+ignoring capacity with only a `WARNING` to show for it. **Seeding the fallback class type is the
+step that is easiest to skip and most expensive to miss.**
+
+It is **idempotent by email** — the email is the identity of the request — and the AI seed texts
+are a verbatim copy of migration 005's bracketed placeholders (a migration cannot seed a tenant
+that does not exist yet, so they necessarily live in two places; `test_accounts` pins them
+together so the duplication fails loudly instead of drifting).
+
+**`tenant_id` is a readable slug, generated mechanically.** "Academia Delariva Itaipuaçu" becomes
+`academia-delariva-itaipuacu` — the leading word is *not* dropped. A stopword list would have
+reproduced a prettier example at the cost of a culture-specific list to maintain and surprising
+answers for names made entirely of generic words; `--tenant-id` is the escape hatch, validated
+against the same rules. Collisions get `-2`..`-9`, then four random hex chars. The generator has
+a TOCTOU race by construction; what actually guarantees uniqueness is `owners.tenant_id UNIQUE`,
+and `provision_tenant()` catches the `UniqueViolation` and regenerates once.
+
+**Creating an account is a command, never a route.** Every new client depends on a WhatsApp
+Sender approved on Twilio, which is a manual step — open signup would create orphan accounts with
+no number, and a founder-only screen would need a role column nothing else in the project needs.
+A command has no attack surface.
+
+```bash
+python -m accounts.provision create --name "…" --email … --password -   # '-' prompts, off the shell history
+python -m accounts.provision list
+python -m accounts.provision reset-password --email … --password -
+python -m accounts.provision set-whatsapp-number --tenant-id … --number …
+python -m accounts.provision slug --name "…"    # dry run
+```
+
+**The first user is bootstrapped at boot, from the environment.** Migration 009 seeds no user,
+because a password hash must not live in a public repository — so if `users` is empty and
+`DASHBOARD_USER`/`DASHBOARD_PASSWORD` are set, `create_app()` creates the pilot's login once.
+This finally gives `DASHBOARD_USER` a job (it was read by `config.py` and used by nothing) and
+takes `DASHBOARD_PASSWORD` out of the auth path: after S3a it is a **seed**, never a credential.
+
+Two layers of idempotence, and both are needed: `count_users() != 0` makes a restart a no-op (so
+a restart cannot resurrect the `.env` password after the founder changes it), and gunicorn calls
+`create_app()` **once per worker**, so the `ON CONFLICT (email) DO NOTHING` inside `create_user()`
+is what actually prevents a duplicate. The whole thing is wrapped in a `try/except` that only
+logs — the same posture as `init_db()`, and for the same reason.
+
+**Trap:** `DASHBOARD_USER` must be an email. A value without `@` makes the bootstrap refuse, which
+would leave the founder locked out of a fresh database — so that one warning `print()`s as well as
+logs, since `create_app()` reports its other boot steps with `print`.
+
+Testing roteiro: `src/tests/test_accounts/ACCOUNTS_TESTING.md`.
+
+### Tenant Resolution by the Twilio `To` Field (Module S3a)
+
+Each gym gets its **own** Twilio number, so the `To` field of an inbound message is the routing
+key that says which tenant it belongs to. `receive_twilio()` read `To` before S3a and threw it
+away; now it resolves the tenant with it.
+
+`receive_twilio()` has **two branches**, and neither is a style choice:
+
+```
+resolved = store.find_tenant_by_whatsapp_number(To)
+
+None      → SANDBOX path : tenant 'default', owner-vs-lead by the OLD global
+                           get_owner_by_phone() scan. Byte for byte the pre-S3a behaviour.
+a tenant  → ROUTED  path : owner-vs-lead decided INSIDE that tenant, via
+                           get_owner_by_phone_in_tenant().
+```
+
+- **Always scoping** would break the sandbox the day a second gym exists: every message resolves
+  to `'default'`, so gym B's owner would be read as one of gym A's leads.
+- **Always scanning globally** is the cross-tenant hijack: gym B's owner writing to gym A's
+  number would reach the owner handler, and their `1` would confirm one of gym A's bookings.
+
+So: trust `To` when `To` is informative, and fall back to the global comparison only when it is
+not. The fallback dies on its own the day every tenant has a registered number.
+
+**Today the sandbox path always runs**, because the Twilio Sandbox hands every gym the same
+inbound number, nobody can claim it, and `owners.whatsapp_number` is `NULL` everywhere. So
+`find_tenant_by_whatsapp_number()` always returns `None` and `store.get_owner_by_phone()` is *the
+same call on the same line* as before. Everything downstream receives `tenant_id='default'`, which
+is what all the defaults already were — nothing observable changes, and the correct shape is
+already in place. `resolve_tenant_by_whatsapp_number()` logs a `WARNING` each time (with only the
+last four digits — the no-whole-numbers rule is not getting an exception) and **never blocks a
+message**: an unregistered number is a configuration gap, not a reason to drop a lead.
+
+**`whatsapp_number` and `owner_phone` are different numbers with different jobs.**
+`whatsapp_number` is the gym's own Twilio line (the `To` — *which gym was this written to?*);
+`owner_phone` is the owner's personal line (the `From` — *is this the owner replying `1`/`2`, or
+a lead?*). Both are plain digits, both are `UNIQUE` since 009, and `whatsapp_number` is nullable
+precisely so the sandbox costs nothing.
+
+**What is staged for S3b.** The resolved `tenant_id` is passed to `handle_text_message(...)` and
+`receive_twilio_owner(...)` as a keyword argument with a default — and **goes no further**. Every
+read inside still runs on its callee's default, and the six call sites in `bot/handlers.py` carry
+an `# S3b:` comment so the seam is greppable. Filling them in is S3b's job; doing it in S3a would
+be a half-isolation that reads as finished. The default keeps every existing caller (both manual
+CLIs and the suites) working with two positional arguments — but note that a *test double* is not
+saved by it, since the caller is what passes the third argument. That is what broke
+`test_owner_notifications`' fakes.
+
 ### Google Calendar Integration
 
 `integrations/` implements OAuth 2.0 onboarding for Google Calendar (Module 1). Routes are
@@ -796,7 +1022,7 @@ All front-end assets live in `src/static/`:
 src/static/
 ├── css/
 │   ├── theme.css         ← CSS variables, dark mode override, .theme-toggle button
-│   ├── login.css         ← login card + form styles
+│   ├── login.css         ← login card + form styles (email AND password since S3a)
 │   ├── menu.css          ← post-login navigation hub
 │   ├── integrations.css  ← Google Calendar connection status page
 │   ├── inbox.css         ← inbox conversation list
@@ -835,8 +1061,8 @@ Defined in `src/.env` and loaded via `config.py`:
 | `TWILIO_AUTH_TOKEN` | Twilio credentials |
 | `TWILIO_SANDBOX_NUMBER` | Twilio sandbox number (default: `whatsapp:+14155238886`) |
 | `VERIFY_TOKEN` | Meta webhook verification token (GET /webhook) |
-| `FLASK_SECRET_KEY` | Flask session secret (required for dashboard auth) |
-| `DASHBOARD_PASSWORD` | Plain-text password for the dashboard login |
+| `FLASK_SECRET_KEY` | Flask session secret (required for dashboard auth — Flask-Login signs the session cookie with it) |
+| `DASHBOARD_PASSWORD` | **Seed only, since Module S3a.** Used once, to create the first `users` row when the table is empty; never compared at login afterwards. Needs 8+ characters |
 | `AI_BASE_URL` | LLM endpoint — Anthropic-compatible (e.g. `https://api.anthropic.com/v1/`) |
 | `AI_MODEL` | Model name (e.g. `claude-haiku-4-5-20251001`) |
 | `AI_API_KEY` | API key for the LLM provider |
@@ -845,7 +1071,7 @@ Defined in `src/.env` and loaded via `config.py`:
 | `GOOGLE_CLIENT_SECRET` | Google Cloud OAuth client secret |
 | `GOOGLE_REDIRECT_URI` | Must match the redirect URI registered in Google Cloud Console exactly |
 | `FLASK_ENV` | Defaults to `development`; not currently gating anything since `seed.py` was removed |
-| `DASHBOARD_USER` | Read by `config.py` but **never used** — login checks the password only |
+| `DASHBOARD_USER` | The founder's **email**. Used once, with `DASHBOARD_PASSWORD`, to bootstrap the first dashboard user. A value without `@` is refused with a printed warning (it was `admin` before S3a, when this variable was read and used by nothing) |
 | `WHATSAPP_TOKEN` | Meta Cloud API token (currently unused) |
 | `WHATSAPP_PHONE_NUMBER_ID` | Meta Cloud API phone ID (currently unused) |
 
@@ -896,13 +1122,45 @@ Defined in `src/.env` and loaded via `config.py`:
   configurable availability **grid** was explicitly deferred, because Google Calendar remains
   the only source of truth for which slots exist. See
   `src/tests/test_class_types/CLASS_TYPES_TESTING.md`.
-- **Future (SaaS phase)** — beyond S2: accounts and per-tenant isolation (S3 — the only item
-  that fixes a structural problem, since almost no read filters by `tenant_id` today), a
-  funnel/metrics screen (S4), and billing (S5). Also pending: reminders before the class, and a
-  real user model so the dashboard stops being single-password.
+- **Module S3a (done)** — Accounts, login and tenant provisioning (`src/accounts/`, migration
+  009). The single plaintext `DASHBOARD_PASSWORD` becomes real accounts: email + scrypt hash in
+  a `users` table, Flask-Login, and `current_user.tenant_id` on every protected route.
+  `provision_tenant()` creates a whole gym in one transaction — `owners`, `ai_configs`, the
+  fallback `class_types` row, `scheduling_configs` and the login — from a founder-only CLI, with
+  no web signup. `owners` gains `whatsapp_number` (UNIQUE, nullable) and `owner_phone` finally
+  gets the `UNIQUE` S1 deferred. The webhook resolves the tenant from Twilio's `To` field,
+  degrading to `'default'` with a warning on the Sandbox. **It establishes identity and tenant
+  resolution; it does NOT isolate reads.** See `src/tests/test_accounts/ACCOUNTS_TESTING.md`.
+- **Module S3b (next, and it must follow closely)** — Per-tenant read isolation: `tenant_id` on
+  `sessions` and its composite key, `messages`' composite FK, `trial_bookings`' tenant-scoped
+  `UNIQUE`, and `tenant_id` threaded into `get_session`, `save_session`, `get_conversation`,
+  `list_conversations`, `count_unread`, `list_bookings_*` and `list_pending_notifications`. The
+  seam is already in place: `handle_text_message()` and `receive_twilio_owner()` receive the
+  resolved tenant and do not propagate it (grep `# S3b:`). **Until it merges, no second account
+  in production** — see the box at the top of this file.
+- **Future (SaaS phase)** — beyond S3b: a funnel/metrics screen (S4) and billing (S5). Also
+  pending: reminders before the class, and multi-operator identity (`users` already accepts two
+  rows per tenant, but `messages.author = 'operator'` still cannot say which human replied).
 
 ## Known Issues / TODOs
 
+- **S3a resolves a tenant and then drops it.** `handle_text_message()` and
+  `receive_twilio_owner()` receive `tenant_id` and pass it to nothing: every read below them
+  still runs unfiltered, across all tenants. This is Module S3b's whole job, and it is why no
+  second account may exist in production yet (see the box at the top). Grep `# S3b:` for the
+  exact call sites.
+- **Logout is a `GET`.** `menu.html`'s "Sair" is an `<a>`, so `/dashboard/logout` answers GET.
+  That is CSRF-able in the log-someone-out direction only — annoying, never dangerous —
+  and predates S3a.
+- **No password reset in the UI, and no signup.** Both are `python -m accounts.provision`
+  subcommands. Deliberate for a founder-run product: an account depends on a Twilio number that
+  only the founder can arrange.
+- **`?next=` is ignored on login, deliberately.** Flask-Login generates it, and honouring it
+  means validating that the target is same-origin; getting that wrong is an open redirect. A
+  user deep-linked to `/dashboard/settings` lands on the menu instead. Do not "fix" this without
+  the validation.
+- **No rate limiting on `/dashboard/login`.** scrypt makes brute force expensive per attempt,
+  but there is no lockout and no attempt counter.
 - **Neither data screen paginates or searches.** `list_conversations()` returns every session,
   `get_conversation()` every message, and `list_bookings_for_review()` every booking ever made —
   all uncapped. Fine for a pilot with one gym; the first busy tenant will need a limit, and the
@@ -910,17 +1168,11 @@ Defined in `src/.env` and loaded via `config.py`:
 - **Polling, not push.** The inbox refreshes on a 5s timer (Module 5, decision 5B), so a new
   message takes up to 5s to appear and every open tab costs two requests per cycle. Websockets
   or SSE would be the upgrade, at the cost of the "no build pipeline" simplicity.
-- **The operator inbox is single-user.** Authentication is the one shared
-  `DASHBOARD_PASSWORD`, so `author = 'operator'` cannot say *which* human replied, and nothing
-  stops two operators from answering the same lead at once. The settings screen inherits this:
-  whoever holds the password edits both sections, including the owner's own phone number.
-- **`owners.owner_phone` still has no `UNIQUE` constraint.** The column is a routing key —
-  `get_owner_by_phone()` scans it on every incoming message — but it is plain `VARCHAR(20)`,
-  so two tenants could hold the same number and the owner-vs-lead decision would pick one at
-  random. Module S1 added the application-side guards (normalize, and refuse a number that is
-  already a lead in `sessions`), which cover the dangerous case for a single tenant, but the
-  database constraint belongs to **S3**, in the same migration that adds `whatsapp_number`.
-  Adding it will need a duplicate check first, since it runs against a populated table.
+- **The operator inbox still cannot say WHICH human replied.** Module S3a gave the dashboard
+  real identity — `current_user` knows who is logged in — but `bot/messages.py` was not touched,
+  so `author = 'operator'` remains anonymous and nothing stops two operators from answering the
+  same lead at once. `users` already accepts several rows per tenant; stamping a `user_id` on
+  the message is the missing half.
 - **A class type's marker also lives in every Calendar event title, and nothing reconciles the
   two.** Renaming a type means deleting it and creating another (the marker is the key, and
   `update_class_type()` refuses to touch it) — but the events already in the agenda keep the old

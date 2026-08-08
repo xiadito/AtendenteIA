@@ -7,6 +7,23 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/theme.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/login.css') }}">
 </head>
+{#
+  Login por e-mail + senha (Módulo S3a). Antes deste módulo havia um único campo
+  de senha, comparado em texto puro com DASHBOARD_PASSWORD; agora o identificador
+  é o e-mail e a senha é verificada contra users.password_hash (werkzeug/scrypt).
+
+  NÃO EXISTE TELA DE CADASTRO, e isso é intencional. Cada academia nova depende
+  de um número aprovado no Twilio, que é uma etapa manual do fundador — um
+  cadastro aberto criaria contas órfãs, sem número, que não recebem mensagem
+  nenhuma. Contas são criadas só pela linha de comando:
+  `python -m accounts.provision create` (ver README.md). Nada aqui deve virar um
+  link de "criar conta" ou de "esqueci minha senha".
+
+  A MENSAGEM DE ERRO É UMA SÓ para e-mail inexistente e senha errada, de
+  propósito: duas mensagens diferentes contam a quem tenta quais e-mails estão
+  cadastrados. accounts/users.py::authenticate() fecha o mesmo vazamento pelo
+  lado do tempo de resposta.
+#}
 <body>
     <button class="theme-toggle" id="themeBtn" onclick="toggleTheme()">🌙 Escuro</button>
     <div class="card">
@@ -16,10 +33,18 @@
         {% endif %}
         <form method="POST" action="{{ url_for('dashboard.login') }}">
             <input
+                type="email"
+                name="email"
+                placeholder="Seu e-mail"
+                autocomplete="username"
+                autofocus
+                required
+            />
+            <input
                 type="password"
                 name="password"
-                placeholder="Digite a senha"
-                autofocus
+                placeholder="Sua senha"
+                autocomplete="current-password"
                 required
             />
             <button type="submit">Entrar</button>

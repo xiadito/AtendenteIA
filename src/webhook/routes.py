@@ -1,9 +1,11 @@
-from flask import Blueprint, abort, jsonify, request, render_template, redirect, url_for, session
-from functools import wraps
+from flask import Blueprint, abort, jsonify, request, render_template, redirect, url_for
+from flask_login import current_user, login_user, logout_user
 from config import Config
 import logging
 import threading
 from datetime import date, datetime, time
+from accounts.auth import User, require_auth
+import accounts.users as accounts_users
 from whatsapp.whatsapp_service import send_message
 from bot.handlers import handle_text_message
 import bot.ai_configs as ai_configs
@@ -138,7 +140,7 @@ def receive_twilio() -> tuple:
     # .get("Campo") retorna o valor ou None se não existir - Twilio usa letra maiúscula nos campos: "From", "Body", "To"
     sender: str = request.form.get("From")  # ex: "whatsapp:+5521999999999"
     body: str   = request.form.get("Body")  # texto da mensagem
-    to: str     = request.form.get("To")    # seu número do sandbox
+    to: str     = request.form.get("To")    # o número DA ACADEMIA — a chave de roteamento do tenant
 
     # Nunca logamos o texto da mensagem: o repositório é público e essas
     # mensagens são conversas inteiras de leads (ver bot/messages.py).
@@ -155,20 +157,56 @@ def receive_twilio() -> tuple:
     clean_number = sender.replace("whatsapp:+", "")
     logger.info(f"Número limpo: {clean_number} | {len(body)} caractere(s)")
 
+    # WHICH GYM WAS THIS WRITTEN TO? (Module S3a.) None means no tenant has
+    # claimed this destination number — which is every message today, because
+    # the Twilio Sandbox hands every gym the SAME inbound number and nobody can
+    # own it. The two branches below are not a style choice:
+    #
+    #   * Always scoping to the resolved tenant would break the sandbox the day
+    #     a second gym exists, since every message resolves to 'default' and
+    #     gym B's owner would be read as one of gym A's leads.
+    #   * Always scanning globally would let gym B's owner, writing to gym A's
+    #     number, be routed to the owner handler — and their "1" would confirm
+    #     one of gym A's bookings.
+    #
+    # So: trust "To" when "To" is informative, and fall back to the old global
+    # comparison only when it is not. The fallback dies on its own the day every
+    # tenant has a registered number.
+    resolved: str | None = store.find_tenant_by_whatsapp_number(to)
+
+    if resolved is None:
+        # SANDBOX PATH — byte for byte the pre-S3a behaviour.
+        logger.warning(
+            "Nenhum tenant registrado para o número de destino; usando '%s'.",
+            store.DEFAULT_TENANT_ID,
+        )
+        tenant_id: str = store.DEFAULT_TENANT_ID
+        owner = store.get_owner_by_phone(clean_number)
+        if owner is not None:
+            tenant_id = owner["tenant_id"]
+    else:
+        # ROUTED PATH — "To" identified the gym, so owner-vs-lead is decided
+        # INSIDE that gym.
+        tenant_id = resolved
+        owner = store.get_owner_by_phone_in_tenant(clean_number, tenant_id)
+
     # A message from the gym owner's own number is a reply to a notification,
     # not a lead starting/continuing a conversation — route it separately.
-    owner = store.get_owner_by_phone(clean_number)
     if owner is not None:
-        receive_twilio_owner(clean_number, body)
+        receive_twilio_owner(clean_number, body, tenant_id=owner["tenant_id"])
     else:
-        handle_text_message(clean_number, body)
+        handle_text_message(clean_number, body, tenant_id=tenant_id)
 
     # O Twilio espera status 200 para confirmar que você recebeu
     # Se não receber 200, ele tenta reenviar
     return jsonify({"status": "ok"}), 200
 
 
-def receive_twilio_owner(owner_phone: str, body: str) -> None:
+def receive_twilio_owner(
+    owner_phone: str,
+    body: str,
+    tenant_id: str = store.DEFAULT_TENANT_ID,
+) -> None:
     """Handle a WhatsApp reply from the gym owner (never a lead).
 
     Maps "1"/"2" to confirmed/cancelled, records the response, and — for a
@@ -181,25 +219,35 @@ def receive_twilio_owner(owner_phone: str, body: str) -> None:
     notification returns None and there is nothing left to answer — which is
     what makes a second "1" harmless.
 
+    MODULE S3b SEAM: tenant_id arrives resolved from the "To" field and goes no
+    further. register_owner_response() still looks the notification up by phone
+    alone and confirm_or_cancel_booking() still reads trial_bookings globally —
+    scoping those is S3b's job, and doing it here would be a half-isolation.
+
     Args:
         owner_phone (str): The owner's number, already in clean_number form.
         body (str): The raw text the owner sent.
+        tenant_id (str): The gym this reply belongs to. Received, not yet
+            propagated (see above). Defaults to the pilot tenant so the manual
+            CLIs and the test suites can keep calling with two arguments.
     """
     stripped = body.strip()
     mapping = {"1": "confirmed", "2": "cancelled"}
     response = mapping.get(stripped)
 
     if response is None:
-        logger.info(f"Owner {owner_phone} sent an unrecognized reply")
+        logger.info(f"Owner {owner_phone} sent an unrecognized reply (tenant {tenant_id})")
         send_message(owner_phone, "Não entendi. Responda 1 para confirmar ou 2 para cancelar.")
         return
 
+    # S3b: scope this lookup to tenant_id.
     row = owner_notifications.register_owner_response(owner_phone, response)
     if row is None:
         logger.warning(f"Owner {owner_phone} replied '{stripped}' but no open notification was found.")
         return
 
     if row["event_type"] == "booking" and row["booking_id"]:
+        # S3b: pass tenant_id here.
         confirmations.confirm_or_cancel_booking(row["booking_id"], response)
 
 
@@ -216,43 +264,64 @@ def status():
 
 dashboard_bp = Blueprint("dashboard", __name__)
 
-def _require_auth(f):
-    """
-    Decorator that redirects unauthenticaded requests to the login page
-    """
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if not session.get("dashboard_authenticated"):
-            return redirect(url_for("dashboard.login"))
-        return f(*args, **kwargs)
-    return decorated
 
 @dashboard_bp.route("/login", methods=["GET", "POST"])
 def login():
-    """Handle dashboard login via password form."""
+    """Authenticate a dashboard user against the `users` table (Module S3a).
+
+    Until S3a this compared the submitted password against DASHBOARD_PASSWORD in
+    plain text and set a boolean in the session. Now it verifies an email plus a
+    scrypt hash and hands the session to Flask-Login, which is what makes
+    current_user.tenant_id available to every protected route.
+
+    ONE ERROR MESSAGE FOR BOTH FAILURES. "E-mail não encontrado" and "senha
+    incorreta" would tell whoever is trying which addresses are registered;
+    users.authenticate() closes the timing side of the same leak.
+
+    THE FAILED ATTEMPT IS LOGGED WITHOUT THE EMAIL — public repository, real
+    people (the rule bot/messages.py follows for conversation text).
+
+    ?next= IS IGNORED, DELIBERATELY. Flask-Login appends it when it bounces an
+    anonymous request; honouring it means validating that the target is
+    same-origin, and getting that wrong is an open redirect. Always landing on
+    the menu is exactly the pre-S3a behaviour, and the menu is the single entry
+    point to the UI anyway (GET / redirects there too).
+    """
+    if current_user.is_authenticated:
+        return redirect(url_for("dashboard.menu"))
+
     error: str | None = None
 
     if request.method == "POST":
-        password: str = request.form.get("password", "")
-        expected: str = Config.DASHBOARD_PASSWORD
+        row: dict | None = accounts_users.authenticate(
+            request.form.get("email", ""),
+            request.form.get("password", ""),
+        )
 
-        if password == expected:
-            session["dashboard_authenticated"] = True
+        if row is not None:
+            # No remember=True: a session cookie only, same lifetime as the
+            # boolean this replaced.
+            login_user(User(row))
             return redirect(url_for("dashboard.menu"))
-        else:
-            error = "Senha incorreta. Tente novamente."
-            logger.warning("Tentativa de login com senha incorreta.")
-    
+
+        error = "E-mail ou senha incorretos."
+        logger.warning("Tentativa de login malsucedida.")
+
     return render_template("login.html", error=error)
+
 
 @dashboard_bp.route("/logout")
 def logout():
-    """ Clear the current session and redirects to the login page."""
-    session.pop("dashboard_authenticated", None)
+    """Clear the login session and redirect to the login page.
+
+    Stays a GET because menu.html's "Sair" is an <a>. Logout over GET is
+    CSRF-able in the log-someone-out direction only — annoying, never dangerous.
+    """
+    logout_user()
     return redirect(url_for("dashboard.login"))
 
 @dashboard_bp.route("/menu")
-@_require_auth
+@require_auth
 def menu():
     """Hub de navegação pós-login: integrações e futuras features."""
     return render_template("menu.html")
@@ -279,7 +348,7 @@ INBOX_POLL_SECONDS: int = 5
 
 
 @dashboard_bp.route("/inbox")
-@_require_auth
+@require_auth
 def inbox():
     """Lista todas as conversas, pausadas e não lidas no topo."""
     return render_template(
@@ -290,7 +359,7 @@ def inbox():
 
 
 @dashboard_bp.route("/inbox/conversations")
-@_require_auth
+@require_auth
 def inbox_conversations():
     """Parcial da lista, alvo do polling HTMX.
 
@@ -312,7 +381,7 @@ def _require_conversation(sender: str) -> None:
 
 
 @dashboard_bp.route("/inbox/<sender>")
-@_require_auth
+@require_auth
 def inbox_conversation(sender: str):
     """Abre uma conversa e marca as mensagens do lead como lidas."""
     _require_conversation(sender)
@@ -329,7 +398,7 @@ def inbox_conversation(sender: str):
 
 
 @dashboard_bp.route("/inbox/<sender>/messages")
-@_require_auth
+@require_auth
 def inbox_conversation_messages(sender: str):
     """Parcial das mensagens, alvo do polling HTMX.
 
@@ -342,7 +411,7 @@ def inbox_conversation_messages(sender: str):
 
 
 @dashboard_bp.route("/inbox/<sender>/reply", methods=["POST"])
-@_require_auth
+@require_auth
 def inbox_reply(sender: str):
     """Envia a resposta do operador ao lead e registra a mensagem.
 
@@ -377,7 +446,7 @@ def inbox_reply(sender: str):
 
 
 @dashboard_bp.route("/inbox/<sender>/resume", methods=["POST"])
-@_require_auth
+@require_auth
 def inbox_resume(sender: str):
     """Devolve a conversa à IA, encerrando o takeover.
 
@@ -463,14 +532,14 @@ def _bookings_context(notice: dict | None = None) -> dict:
 
 
 @dashboard_bp.route("/bookings")
-@_require_auth
+@require_auth
 def bookings_review():
     """Lista os agendamentos, pendentes de confirmação no topo."""
     return render_template("bookings.html", **_bookings_context())
 
 
 @dashboard_bp.route("/bookings/list")
-@_require_auth
+@require_auth
 def bookings_list():
     """Parcial da lista, para recarregar só ela.
 
@@ -481,14 +550,14 @@ def bookings_list():
 
 
 @dashboard_bp.route("/bookings/<booking_id>/confirm", methods=["POST"])
-@_require_auth
+@require_auth
 def bookings_confirm(booking_id: str):
     """Confirma um agendamento pelo painel."""
     return _booking_decision_response(booking_id, "confirmed")
 
 
 @dashboard_bp.route("/bookings/<booking_id>/cancel", methods=["POST"])
-@_require_auth
+@require_auth
 def bookings_cancel(booking_id: str):
     """Cancela um agendamento pelo painel."""
     return _booking_decision_response(booking_id, "cancelled")
@@ -598,14 +667,14 @@ def _settings_context(notice: dict | None = None, ai_form: dict[str, str] | None
 
 
 @dashboard_bp.route("/settings")
-@_require_auth
+@require_auth
 def settings():
     """Tela de configurações: personalidade da IA e dados da conta."""
     return render_template("settings.html", **_settings_context())
 
 
 @dashboard_bp.route("/settings/ai", methods=["POST"])
-@_require_auth
+@require_auth
 def settings_save_ai():
     """Salva a camada customizável do prompt (ai_configs).
 
@@ -633,7 +702,7 @@ def settings_save_ai():
 
 
 @dashboard_bp.route("/settings/account", methods=["POST"])
-@_require_auth
+@require_auth
 def settings_save_account():
     """Salva o telefone do dono, com as duas guardas que protegem o roteamento.
 
@@ -737,7 +806,7 @@ def _parse_capacity(raw: str) -> tuple[bool, int | None]:
 
 
 @dashboard_bp.route("/settings/class-types", methods=["POST"])
-@_require_auth
+@require_auth
 def settings_create_class_type():
     """Cadastra um tipo de aula novo.
 
@@ -772,7 +841,7 @@ def settings_create_class_type():
 
 
 @dashboard_bp.route("/settings/class-types/<marker>", methods=["POST"])
-@_require_auth
+@require_auth
 def settings_save_class_type(marker: str):
     """Salva nome, capacidade e exigência de nome da criança de uma turma.
 
@@ -798,7 +867,7 @@ def settings_save_class_type(marker: str):
 
 
 @dashboard_bp.route("/settings/class-types/<marker>/fallback", methods=["POST"])
-@_require_auth
+@require_auth
 def settings_set_fallback_class_type(marker: str):
     """Define qual turma recebe os eventos sem marcador reconhecido no título."""
     if not class_types.set_fallback_class_type(marker):
@@ -815,7 +884,7 @@ def settings_set_fallback_class_type(marker: str):
 
 
 @dashboard_bp.route("/settings/class-types/<marker>/delete", methods=["POST"])
-@_require_auth
+@require_auth
 def settings_delete_class_type(marker: str):
     """Exclui uma turma, exceto a padrão.
 
@@ -840,7 +909,7 @@ def settings_delete_class_type(marker: str):
 
 
 @dashboard_bp.route("/settings/class-events", methods=["POST"])
-@_require_auth
+@require_auth
 def settings_create_class_event():
     """Cria uma aula na agenda a partir de turma + data + horário.
 
@@ -935,7 +1004,7 @@ def _parse_class_event_window(
 
 
 @dashboard_bp.route("/settings/scheduling", methods=["POST"])
-@_require_auth
+@require_auth
 def settings_save_scheduling():
     """Salva a janela de busca de horários (days_ahead)."""
     raw: str = request.form.get("days_ahead", "").strip()
