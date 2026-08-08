@@ -5,6 +5,9 @@ import logging
 import threading
 from datetime import date, datetime, time
 from accounts.auth import User, require_auth
+import accounts.onboarding as onboarding_steps
+import accounts.provision as provision
+import accounts.signup as signup_guard
 import accounts.users as accounts_users
 from whatsapp.whatsapp_service import send_message
 from bot.handlers import handle_text_message
@@ -307,7 +310,128 @@ def login():
         error = "E-mail ou senha incorretos."
         logger.warning("Tentativa de login malsucedida.")
 
-    return render_template("login.html", error=error)
+    return render_template("login.html", error=error, signup_enabled=Config.SIGNUP_ENABLED)
+
+
+@dashboard_bp.route("/signup", methods=["GET", "POST"])
+def signup():
+    """Let a gym owner create their own account (Module S3c).
+
+    Reverses Module S3a's closed-signup decision. The whole business rule is
+    already written: this route validates a form and calls
+    provision.provision_tenant(), which creates `owners`, `ai_configs`, the
+    fallback `class_types` row, `scheduling_configs` and `users` in ONE
+    transaction. Nothing about what a tenant needs lives here.
+
+    ⛔ BEHIND A FLAG THAT DEFAULTS TO OFF. A public signup does not merely risk a
+    second tenant — it MANUFACTURES them, and until Module S3b merges the reads
+    do not filter by tenant, so every gym that signed up would see the pilot's
+    conversations and bookings. `SIGNUP_ENABLED` stays false until S3b.
+
+    404, NOT 403, WHEN DISABLED, and before anything else runs: 403 advertises
+    that there is something here to come back for.
+
+    THE SLUG IS NOT ACCEPTED FROM THE FORM. provision_tenant() takes a
+    `tenant_id` (the founder's CLI uses it), but reading it from a public form
+    would let a stranger choose a primary key, and race other gyms for good
+    names. It is simply never read here.
+
+    THE "EMAIL ALREADY EXISTS" ANSWER DOES NOT CONFIRM THE EMAIL EXISTS. The
+    login route is deliberately generic so it cannot be used to enumerate
+    accounts; a signup form that happily says "this address is registered" hands
+    back exactly that oracle.
+    """
+    if not Config.SIGNUP_ENABLED:
+        abort(404)
+
+    if current_user.is_authenticated:
+        return redirect(url_for("dashboard.menu"))
+
+    form: dict[str, str] = {"academy_name": "", "email": ""}
+
+    if request.method == "GET":
+        return render_template("signup.html", error=None, form=form)
+
+    form["academy_name"] = request.form.get("academy_name", "").strip()
+    form["email"] = request.form.get("email", "").strip()
+    password: str = request.form.get("password", "")
+    password_confirm: str = request.form.get("password_confirm", "")
+
+    # Honeypot: a filled hidden field means a bot walked the DOM. Answer the same
+    # success page a human would get, and write nothing — telling it apart is
+    # what teaches the next bot to skip the field.
+    if signup_guard.is_honeypot_filled(request.form.get(signup_guard.HONEYPOT_FIELD)):
+        logger.warning("Signup honeypot triggered; request discarded.")
+        return render_template("signup_done.html")
+
+    client_ip: str | None = _client_ip()
+
+    if signup_guard.too_many_attempts(client_ip):
+        return render_template(
+            "signup.html",
+            error="Muitas tentativas de cadastro. Tente novamente daqui a pouco.",
+            form=form,
+        ), 429
+
+    signup_guard.record_attempt(client_ip)
+
+    # The only validation that belongs to the screen. Everything else already
+    # lives in users.normalize_email() / users.validate_password(), which
+    # provision_tenant() applies before touching the database.
+    if password != password_confirm:
+        return render_template("signup.html", error="As senhas não coincidem.", form=form)
+
+    try:
+        result: dict = provision.provision_tenant(
+            academy_name=form["academy_name"],
+            email=form["email"],
+            password=password,
+        )
+    except (ValueError, RuntimeError) as exc:
+        # provision_tenant raises with Portuguese messages for a bad email, a
+        # short password and an empty name. Re-render with the reason; never 500.
+        return render_template("signup.html", error=str(exc), form=form)
+
+    if not result["created"]:
+        # The email was taken. Deliberately vague — see the docstring.
+        return render_template(
+            "signup.html",
+            error="Não foi possível criar a conta com esses dados. "
+                  "Se você já tem conta, entre.",
+            form=form,
+        )
+
+    row: dict | None = accounts_users.get_user_by_id(result["user_id"])
+    if row is None:
+        # Should be unreachable: the row was just committed.
+        logger.error("Provisioned tenant but could not load the new user back.")
+        return redirect(url_for("dashboard.login"))
+
+    login_user(User(row))
+    logger.info("New tenant '%s' signed up from the public form.", result["tenant_id"])
+    return redirect(url_for("dashboard.onboarding"))
+
+
+def _client_ip() -> str | None:
+    """Return the address of the client, not of Railway's proxy.
+
+    `request.remote_addr` behind a proxy is the PROXY, so every signup on
+    Railway would share one bucket and the per-IP ceiling would lock the form
+    for everybody after five attempts, worldwide. X-Forwarded-For's first entry
+    is the original client.
+
+    The header is client-controlled and therefore spoofable — which is fine for
+    a throttle (the honest cost of spoofing it is that the attacker evades a
+    guard that was never the last line anyway) and would NOT be fine for
+    anything that granted access.
+
+    Returns:
+        str | None: The client address, or None when it cannot be determined.
+    """
+    forwarded: str | None = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.remote_addr
 
 
 @dashboard_bp.route("/logout")
@@ -320,11 +444,38 @@ def logout():
     logout_user()
     return redirect(url_for("dashboard.login"))
 
+@dashboard_bp.route("/onboarding")
+@require_auth
+def onboarding():
+    """Show what a new gym still has to do before the bot can attend (Module S3c).
+
+    Where signup lands. The checklist has NO state of its own — every step is
+    derived from rows that already exist, so it ticks itself as the owner works
+    and cannot drift from reality. See accounts/onboarding.py.
+
+    The last step ("número de WhatsApp") is the only one the owner cannot do:
+    it needs a Twilio Sender approved by the founder. Saying so on screen is the
+    point of this page — otherwise they configure everything correctly and are
+    left wondering why the bot is silent.
+    """
+    steps: list[dict] = onboarding_steps.get_steps(current_user.tenant_id)
+    return render_template(
+        "onboarding.html",
+        steps=steps,
+        pending=sum(1 for step in steps if not step["done"]),
+    )
+
+
 @dashboard_bp.route("/menu")
 @require_auth
 def menu():
     """Hub de navegação pós-login: integrações e futuras features."""
-    return render_template("menu.html")
+    # O tile "Primeiros passos" só aparece enquanto houver pendência, para o
+    # painel de uma academia já configurada não carregar um atalho morto.
+    return render_template(
+        "menu.html",
+        onboarding_pending=onboarding_steps.pending_count(current_user.tenant_id),
+    )
 
 
 #
