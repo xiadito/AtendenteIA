@@ -2,25 +2,24 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> ## ⛔ Do not create a second account in production until S3b merges
+> ## ✅ A second account is safe since Module S3b
 >
-> Module S3a gave the project accounts, login and tenant provisioning. It did **not** give it
-> read isolation. `sessions` has no `tenant_id` column, `messages`' foreign key is not composite,
-> `trial_bookings`' `UNIQUE` is not tenant-scoped, and `get_session()`, `get_conversation()`,
-> `list_conversations()`, `count_unread()`, `list_bookings_for_review()` and
-> `list_pending_notifications()` still read every tenant's rows. A second tenant would see the
-> pilot's conversations and bookings, and the pilot would see theirs.
+> The rule that used to live here — *no second tenant in production* — is **gone**, and this note
+> is what it turned into. Module S3a gave the project accounts, login and tenant provisioning but
+> **not** read isolation; Module S3b supplied it. `sessions` is keyed by `(tenant_id, sender)`,
+> `messages` has a composite foreign key onto it, `trial_bookings`' `UNIQUE` includes the tenant,
+> and every core read takes a `tenant_id` and filters by it.
 >
-> **Not even the founder's own test account.** With `'default'` as the only tenant, S3a in
-> production is safe and behaves exactly as it did before.
+> **`SIGNUP_ENABLED` now defaults to `true`** — the founder opened the door once the isolation was
+> in place. The flag was never a feature toggle; it was a safety interlock, and S3b left it with
+> nothing to protect. **It still does not make a signup into a working gym:** a new tenant receives
+> no WhatsApp message until its Twilio Sender is approved by hand and `whatsapp_number` is set,
+> which is the last, buttonless line of `/dashboard/onboarding`. An environment that wants the
+> door shut must now say `SIGNUP_ENABLED="false"` explicitly.
 >
-> **And do not set `SIGNUP_ENABLED=true` before S3b either.** Module S3c added a public signup
-> screen; a public signup does not merely risk a second tenant, it *manufactures* them. The flag
-> defaults to `false` and the route answers 404 while it is off — leave it that way until the
-> reads filter by tenant.
->
-> On a development database, `python -m accounts.provision` is safe — a second tenant is exactly
-> what `tests/test_accounts` creates.
+> **What is still shared across tenants, deliberately:** the `owner_notifications` queue (drained
+> globally by the cron, resolved per row), `signup_attempts` (a system-wide throttle), and
+> `products` (grocery-store legacy, read only by `sync_agent/`).
 
 ## Development Commands
 
@@ -104,20 +103,30 @@ python tests/test_accounts/test_accounts_suite.py
 
 # Module S3c — public signup + CSRF (no network at all; the only suite that runs CSRF ON)
 python tests/test_signup/test_signup_suite.py
+
+# Module S3b — per-tenant read isolation (two fixture gyms; no network at all)
+python tests/test_tenant_isolation/test_tenant_isolation_suite.py
 ```
 
 Each suite prints a PASS/FAIL report and exits non-zero on failure; SKIPs don't fail the run.
 Each module also has a manual CLI (`test_scheduling.py`, `test_ai_action.py`,
 `test_owner_notifications.py`, `test_inbox.py`, `test_confirmation.py`, `test_settings.py`,
-`test_class_types.py`, `test_accounts.py`, `test_signup.py`) and a testing roteiro
-(`SCHEDULING_ENGINE_TESTING.md`, `AI_ACTION_TESTING.md`, `OWNER_NOTIFICATIONS_TESTING.md`,
-`INBOX_TESTING.md`, `CONFIRMATION_TESTING.md`, `SETTINGS_TESTING.md`, `CLASS_TYPES_TESTING.md`,
-`ACCOUNTS_TESTING.md`, `SIGNUP_TESTING.md`).
+`test_class_types.py`, `test_accounts.py`, `test_signup.py`, `test_tenant_isolation.py`) and a
+testing roteiro (`SCHEDULING_ENGINE_TESTING.md`, `AI_ACTION_TESTING.md`,
+`OWNER_NOTIFICATIONS_TESTING.md`, `INBOX_TESTING.md`, `CONFIRMATION_TESTING.md`,
+`SETTINGS_TESTING.md`, `CLASS_TYPES_TESTING.md`, `ACCOUNTS_TESTING.md`, `SIGNUP_TESTING.md`,
+`TENANT_ISOLATION_TESTING.md`).
 
 Each suite owns a sender prefix so their teardowns can never collide: `5521000...` (scheduling),
 `5522000...` (AI action), `5523000...` (owner notifications), `5524000...` (inbox),
 `5525000...` (confirmation), `5526000...` (settings), `5527000...` (class types),
-`5528000...` (accounts), `5529000...` (signup).
+`5528000...` (accounts), `5529000...` (signup), `5530000...` (tenant isolation).
+
+**`test_tenant_isolation` owns an email domain of its own**, `@suite-s3b.corujai.test`, which
+deliberately does NOT match the `%@suite.corujai.test` pattern `test_accounts` deletes in its
+teardown — otherwise one suite's cleanup could delete the other's fixtures. It creates two
+fixture gyms under `suite-s3b-` and has **no `/tmp` backup**, for the same reason `test_accounts`
+has none: it never writes to the pilot's rows.
 
 **Since Module S3a every suite that drives the dashboard creates its own `users` row and logs in
 through the real `POST /dashboard/login`.** Stuffing `session["dashboard_authenticated"] = True`
@@ -127,7 +136,7 @@ can never delete each other's row, and each deletes only its own. Forging Flask-
 session keys (`_user_id`, `_fresh`) was rejected: they are undocumented, and they would still
 need a real `users` row for the `user_loader` to resolve.
 
-**Since Module S3c, six test files also carry `app.config["WTF_CSRF_ENABLED"] = False`** beside
+**Since Module S3c, seven test files also carry `app.config["WTF_CSRF_ENABLED"] = False`** beside
 their `TESTING` line. Flask-WTF does not disable CSRF for `TESTING`; without that line every POST
 through a test client returns 400 without reaching the code under test. `test_signup` is the
 exception that proves the wiring: it is the only suite that runs anything with CSRF **on**.
@@ -192,27 +201,37 @@ SELECT id, email, tenant_id, created_at FROM users ORDER BY id;
 -- NULL receives nothing of its own: every message falls back to 'default'.
 SELECT tenant_id, whatsapp_number, owner_phone FROM owners ORDER BY tenant_id;
 
--- ⛔ MORE THAN ONE ROW HERE IN PRODUCTION IS THE ALARM. Until S3b merges, the
--- reads do not filter by tenant, so a second tenant sees the pilot's data.
+-- How many gyms exist. Since Module S3b more than one row is normal, not an
+-- alarm: every core read filters by tenant.
 SELECT tenant_id FROM owners;
 
+-- SINCE MODULE S3b, ALWAYS SELECT tenant_id IN THESE. `sessions` is keyed by
+-- (tenant_id, sender), so a query on `sender` alone can return two different
+-- people's conversations side by side and look like one.
+
 -- Funnel state per lead (why the state lives in columns, not JSONB)
-SELECT sender, stage, lead_name, child_name, qualification, is_paused, updated_at
+SELECT tenant_id, sender, stage, lead_name, child_name, qualification, is_paused, updated_at
 FROM sessions ORDER BY updated_at DESC;
 
 -- One conversation, in the order the inbox shows it (tie-break by id — see Session Storage)
 SELECT author, is_read, created_at, content
-FROM messages WHERE sender = '5521999999999' ORDER BY created_at, id;
+FROM messages WHERE tenant_id = 'default' AND sender = '5521999999999'
+ORDER BY created_at, id;
 
--- What the operator still has to read
-SELECT sender, COUNT(*) AS unread FROM messages
-WHERE author = 'lead' AND is_read = FALSE GROUP BY sender ORDER BY unread DESC;
+-- What the operator still has to read, per gym
+SELECT tenant_id, sender, COUNT(*) AS unread FROM messages
+WHERE author = 'lead' AND is_read = FALSE
+GROUP BY tenant_id, sender ORDER BY unread DESC;
 
 -- Conversations someone took over and may not have handed back
-SELECT sender, stage, updated_at FROM sessions WHERE is_paused = TRUE;
+SELECT tenant_id, sender, stage, updated_at FROM sessions WHERE is_paused = TRUE;
+
+-- The same lead at two gyms — impossible before migration 011, ordinary after it
+SELECT sender, COUNT(*) AS gyms, array_agg(tenant_id) AS tenants
+FROM sessions GROUP BY sender HAVING COUNT(*) > 1;
 
 -- Bookings the AI closed, newest first
-SELECT sender, lead_name, child_name, class_type, slot_start, status
+SELECT tenant_id, sender, lead_name, child_name, class_type, slot_start, status
 FROM trial_bookings ORDER BY created_at DESC;
 
 -- What the owner still has to decide — the same ordering the /dashboard/bookings screen uses
@@ -256,7 +275,9 @@ UPDATE sessions SET is_paused = FALSE WHERE sender = '5521999999999';
 
 -- Reset one lead to a fresh greeting without touching the others.
 -- CAREFUL: this deletes their messages too (ON DELETE CASCADE).
-DELETE FROM sessions WHERE sender = '5521999999999';
+-- The tenant is not optional here: without it this forgets the same person at
+-- EVERY gym they are a lead of.
+DELETE FROM sessions WHERE tenant_id = 'default' AND sender = '5521999999999';
 ```
 
 **Don't `TRUNCATE owners`** when clearing test data — it holds the Google Calendar tokens, and
@@ -298,7 +319,7 @@ Twilio POST /webhook
         ├─ None  → SANDBOX path: tenant 'default' + the global get_owner_by_phone() scan
         └─ tenant → ROUTED path: get_owner_by_phone_in_tenant() — owner-vs-lead INSIDE that gym
     → (owner reply? route to receive_twilio_owner(…, tenant_id=…) instead)
-    → bot/handlers.py::handle_text_message(…, tenant_id=…)   (received, NOT propagated — S3b)
+    → bot/handlers.py::handle_text_message(…, tenant_id=…)   (propagated to every read — S3b)
       → bot/session.py           (Postgres-backed conversation state)
       → bot/messages.py          (records the lead's message — ALSO when paused, then returns)
       → bot/ai_configs.py        (per-tenant customizable prompt layer)
@@ -430,11 +451,11 @@ JSONB blob carried on the session.
   (validated in Python, no DB `CHECK`). The operator inbox reads it whole; the AI reads a
   window of it. `is_read` only carries meaning for `author = 'lead'` — it answers "has the
   **operator** seen this?" — so AI and operator messages are born read.
-- `sessions` — one row per `sender`, created complete by migration 001, holding **state only**.
-  The Module 3 **conversation state** lives in discrete typed columns (`stage`, `lead_name`,
+- `sessions` — one row per `(tenant_id, sender)` since Module S3b, holding **state only**. The
+  Module 3 **conversation state** lives in discrete typed columns (`stage`, `lead_name`,
   `child_name`, `qualification`, `is_paused`), not JSONB, so the funnel is explorable with
   plain SQL. Module 5 adds two transient markers, `needs_resume_note` and
-  `conversation_started_at`. Indexed by `stage` (`idx_sessions_stage`).
+  `conversation_started_at`. Indexed by `(tenant_id, stage)` (`idx_sessions_tenant_stage`).
 - `trial_bookings` — one row per trial-class booking (Module 2), with `child_name` for class
   types flagged `requires_child_name` (Module 3 preliminary step; the flag itself moved to
   `class_types` in Module S2), also created complete by migration 004.
@@ -474,9 +495,16 @@ by hand in the `UPDATE`, so a new state column needs adding in **both** places.
 message and wrong for the dashboard, where the sender comes from the URL. `session_exists()`
 is the read-only lookup the inbox routes use to `404` instead of minting a phantom conversation.
 
-**Trap:** `clear_session()` now deletes the lead's **messages** too — `messages.sender` carries
-`ON DELETE CASCADE`. That cascade is load-bearing: without it every `DELETE FROM sessions`
-(the Module 3 test CLI's `reset`, both suites' teardown) would fail on a foreign-key violation.
+**Trap:** `clear_session()` now deletes the lead's **messages** too — `messages (tenant_id,
+sender)` carries `ON DELETE CASCADE`. That cascade is load-bearing: without it every
+`DELETE FROM sessions` (the Module 3 test CLI's `reset`, both suites' teardown) would fail on a
+foreign-key violation. Since Module S3b the cascade travels through the **composite** key, so
+forgetting a lead at one gym leaves the same person's conversation at another gym intact.
+
+**Trap:** every function in `session.py`, `messages.py` and `bookings.py` takes
+`tenant_id: str = DEFAULT_TENANT_ID` and filters on it. The default is what keeps the pilot's
+callers unchanged — and it is also the failure mode to watch for: **omitting the argument does
+not raise, it silently reads the pilot's rows.** When adding a caller, pass the tenant.
 
 **Trap:** never order `messages` by `created_at` alone. The column defaults to `NOW()`, which is
 `transaction_timestamp()` — rows written in one transaction share an instant. Every query in
@@ -494,10 +522,12 @@ with **no DB `CHECK`**, so widening an enum is a code change with no migration (
 `database/migrations/` in filename order, recording each version so it never re-runs.
 There is no ORM — SQLAlchemy/Alembic are deliberately *not* dependencies.
 
-The sequence is **contiguous, 001–010**. Each table is created complete by a single migration,
-with one deliberate exception: **migration 009 alters `owners` twice** (Module S3a), because
+The sequence is **contiguous, 001–011**. Each table is created complete by a single migration,
+with two deliberate exceptions: **migration 009 alters `owners` twice** (Module S3a), because
 `whatsapp_number` did not exist as a concept until the one-number-per-gym decision and 003 was
-already applied everywhere. Everything else still holds the property.
+already applied everywhere; and **migration 011 alters `sessions`, `messages` and
+`trial_bookings`** (Module S3b), because tenant isolation is a change to three tables' KEYS that
+cannot be expressed as a new table.
 
 | Version | Creates |
 |---|---|
@@ -511,6 +541,7 @@ already applied everywhere. Everything else still holds the property.
 | `008_create_class_types.sql` | `class_types` (per-tenant class types, PK `(tenant_id, marker)`) + a partial unique index for one fallback per tenant, **and** `scheduling_configs` (`days_ahead`); seeds both for the `default` tenant |
 | `009_create_users.sql` | `users` (dashboard accounts, `email` UNIQUE, FK `tenant_id → owners` `ON DELETE CASCADE`) + `idx_users_tenant_id`; **alters** `owners` to add `whatsapp_number`, plus unique indexes on `whatsapp_number` and on `owner_phone` (the one S1 deferred). **No seed** — a password hash must not live in a public repo, so the first user is created at runtime by `accounts/bootstrap.py` |
 | `010_create_signup_attempts.sql` | `signup_attempts` (the public-signup throttle: one row per attempt, `ip_hash` never the raw IP) + `(ip_hash, created_at)` in that order — every query is equality-then-window |
+| `011_tenant_isolation.sql` | **Creates no table.** Adds `sessions.tenant_id`, moves its PK to `(tenant_id, sender)`, recreates `messages`' FK as composite `ON DELETE CASCADE`, makes `trial_bookings`' UNIQUE tenant-scoped, and rebuilds four indexes with `tenant_id` in front. See below |
 
 **The "never edit an applied migration" rule was suspended while the project was pre-deploy —
 and Module 5 was the last time.** With no database created anywhere, there was no applied
@@ -572,6 +603,31 @@ indexes. Two things about it are worth copying:
 
   If 009 raises, `init_db()` propagates the exception, `create_app()` **only prints it**, and the
   app boots with no `users` table — every login 500s and the failure looks nothing like its cause.
+
+**`011` (Module S3b) is the first migration that changes a PRIMARY KEY on a populated table**, and
+its ordering is the whole file. `database/db.py` runs each `.sql` in one `cur.execute()` followed
+by one `commit()`, so the file is a single transaction for free — it applies completely or leaves
+the database untouched. The order:
+
+1. `ADD COLUMN IF NOT EXISTS tenant_id … NOT NULL DEFAULT 'default'` on `sessions` — the DEFAULT
+   backfills existing rows in the same statement, with no window in which the column is NULL.
+2. Realign `messages.tenant_id` to its session's tenant. A no-op today; it is what guarantees the
+   composite FK in step 5 cannot be rejected by divergent data.
+3. **Drop** the `messages → sessions` FK. It must go before the key it depends on.
+4. Swap `sessions`' PK to `(tenant_id, sender)`.
+5. Recreate the FK composite, still `ON DELETE CASCADE`.
+6. `trial_bookings`: drop the global `UNIQUE (calendar_event_id, sender)`, create
+   `idx_trial_bookings_tenant_event_sender` — a unique INDEX, the idiom 008 and 009 already use,
+   which still raises the `UniqueViolation` `create_booking_with_lock()` catches.
+7. Rebuild the four indexes with `tenant_id` leading.
+
+**Constraint names are DISCOVERED, never hardcoded** (004 and 007 wrote theirs inline and let
+Postgres name them), and each destructive step is wrapped in a `DO` block guarded by a
+`pg_constraint` lookup. That makes the file **convergent**, not merely idempotent: it produces the
+same schema from a database sitting at 010 and from one that already carries these keys. A PK and
+a composite FK cannot be expressed as plain indexes, which is why this file uses `ADD CONSTRAINT`
+at all — the guard buys the same guarantee the `CREATE UNIQUE INDEX IF NOT EXISTS` rule buys
+elsewhere.
 
 ### Two-Layer System Prompt (Module 3)
 
@@ -900,8 +956,9 @@ changes, which would break the Google OAuth round-trip behind Railway's proxy �
 failure would become routine), and **no remember-me** (session cookie only, same lifetime as the
 boolean it replaced).
 
-**`current_user.tenant_id` is the S3b seam.** Every protected route can read it; **no read filters
-by it yet.**
+**`current_user.tenant_id` is what isolates the dashboard.** Every protected route reads it and
+hands it to the data layer; since Module S3b that is how the inbox, the bookings screen, the
+settings screen and the Google Calendar connection each stay inside one gym.
 
 **Login is deliberately unhelpful about failures.** One message for a wrong email and a wrong
 password, and `authenticate()` compares against a module-level dummy hash when the email does not
@@ -1001,14 +1058,71 @@ message**: an unregistered number is a configuration gap, not a reason to drop a
 a lead?*). Both are plain digits, both are `UNIQUE` since 009, and `whatsapp_number` is nullable
 precisely so the sandbox costs nothing.
 
-**What is staged for S3b.** The resolved `tenant_id` is passed to `handle_text_message(...)` and
-`receive_twilio_owner(...)` as a keyword argument with a default — and **goes no further**. Every
-read inside still runs on its callee's default, and the six call sites in `bot/handlers.py` carry
-an `# S3b:` comment so the seam is greppable. Filling them in is S3b's job; doing it in S3a would
-be a half-isolation that reads as finished. The default keeps every existing caller (both manual
-CLIs and the suites) working with two positional arguments — but note that a *test double* is not
-saved by it, since the caller is what passes the third argument. That is what broke
-`test_owner_notifications`' fakes.
+**S3a stopped here, and S3b finished it.** The resolved `tenant_id` was passed to
+`handle_text_message(...)` and `receive_twilio_owner(...)` and went no further; the nine call
+sites carried an `# S3b:` comment so the seam stayed greppable. Module S3b filled every one of
+them — see below. The keyword-with-a-default shape survives, and note that a *test double* is not
+saved by it, since the caller is what passes the argument: that is what broke
+`test_owner_notifications`' fakes in S3a, and `test_ai_action`'s and `test_class_types`' in S3b.
+
+### Per-Tenant Read Isolation (Module S3b)
+
+The module that made a second gym *safe*, and the pair of S3a. S3a established identity and
+resolved a tenant; **no read filtered by one**. This one supplies the filtering, in two halves.
+
+**Half one is migration 011** — three keys, described in full under Database & Migrations. The
+shape it buys: `sessions` keyed by `(tenant_id, sender)`, `messages` referencing that pair with
+`ON DELETE CASCADE`, `trial_bookings` unique on `(tenant_id, calendar_event_id, sender)`. The
+first is what lets **the same lead exist at two gyms**, which the old single-column key made
+impossible; the second makes a message belong to a conversation-at-a-gym rather than to a phone
+number; the third lets one person book the same Calendar event at two gyms while still being
+stopped from booking it twice at one.
+
+**Half two is `tenant_id: str = DEFAULT_TENANT_ID` on every core read**, plus the filter in the
+`WHERE`. `bot/session.py`, `bot/messages.py`, `bot/bookings.py`, `bot/owner_notifications.py` and
+`bot/confirmations.py` all follow the signature style `bot/class_types.py` set in S2.
+`integrations/store.py` needed no change — it was already tenant-parametrized throughout.
+
+**The tenant is always an ARGUMENT, never read from `flask.g` or `current_user` inside the data
+layer** (decision 14A). Not a style preference: `bot/` and `integrations/` also run under the cron
+and the webhook, where there is no request at all. The webhook passes what it resolved from `To`,
+the dashboard passes `current_user.tenant_id`, the cron passes the tenant of the row it is on.
+
+**Where the key was already global, the tenant is a GUARD.** `get_booking(id)` and
+`update_booking_status(id)` would find their row from the uuid4 alone. The tenant is there because
+the dashboard builds those calls out of a URL segment: without it, gym A reads and decides gym B's
+booking by pasting its id. A booking belonging to someone else answers `None` — the same answer as
+a nonexistent id, which the routes already knew how to render.
+
+**`list_pending_notifications()` stays global, deliberately.** It is the system's outbound queue
+and the cron drains every gym in one pass; each row carries its own `tenant_id` and
+`jobs/drain_notifications.py` resolves the booking and the class labels from **that**. Labels are
+loaded once per tenant into a dict local to `main()` — once per run was right while one gym
+existed, once per row would be a query per notification.
+
+**The advisory lock did not change.** `pg_advisory_xact_lock(hashtext(calendar_event_id))` is
+still correct: a Google event id is globally unique and two gyms read two different calendars.
+What became tenant-scoped is the **capacity count** taken inside the lock, which answers a
+different question — "how many seats has THIS gym sold?".
+
+**Two leaks were found while wiring this that were not schema problems at all**, and both are the
+same shape: code that knew which gym it was working for but read the pilot's row anyway.
+
+- `bot/scheduling.py::_get_service_or_raise()` opened the **pilot's** Google Calendar regardless
+  of tenant. A second gym would have been offered the pilot's free slots and written its bookings
+  into the pilot's agenda — and nothing downstream could have caught it, because the slots come
+  back well-formed, just from the wrong calendar.
+- `integrations/routes.py` saved the OAuth result to tenant `'default'`. Gym B connecting its
+  calendar would have **overwritten the pilot's credentials**, breaking the pilot with no error
+  pointing anywhere near the cause.
+
+**The `# S3b:` seam is closed.** `grep -rn "# S3b:" src/` returns nothing, and
+`tests/test_tenant_isolation` scenario 16 fails the suite if a marker ever comes back. Beyond the
+nine markers, the 24 `@require_auth` routes were swept to pass `current_user.tenant_id` — the
+easiest half of the module to get wrong, because parametrizing a function and forgetting to pass
+the value at the route leaves everything reading `'default'` with nothing broken to notice.
+
+Testing roteiro: `src/tests/test_tenant_isolation/TENANT_ISOLATION_TESTING.md`.
 
 ### Public Signup (Module S3c)
 
@@ -1019,11 +1133,13 @@ receive a single message. What changed is the answer — instead of closing the 
 and lands the new owner on a checklist that says what is still missing, including the part only
 the founder can do.
 
-**Everything is behind `SIGNUP_ENABLED`, which defaults to `false`.** With the flag off the route
-`abort(404)`s on the first line — 404 rather than 403, because 403 advertises that there is
-something to come back for — and `login.html` does not render the link. This is not caution about
-a hypothetical: a public signup *manufactures* second tenants, and until S3b the reads do not
-filter by one.
+**Everything is behind `SIGNUP_ENABLED`, which defaults to `true` since Module S3b.** With the flag
+off the route `abort(404)`s on the first line — 404 rather than 403, because 403 advertises that
+there is something to come back for — and `login.html` does not render the link. When S3c shipped
+the flag defaulted to `false` and that was a hard safety interlock: a public signup *manufactures*
+second tenants and the reads did not yet filter by one. S3b removed the reason, and the founder
+flipped it. The route and its two guards (honeypot, per-IP ceiling) are unchanged — what changed is
+only which way the switch points when nobody sets it.
 
 **The route has no business logic.** It validates the form and calls
 `accounts/provision.py::provision_tenant()`, which S3a already wrote: five tables in one
@@ -1174,7 +1290,7 @@ Defined in `src/.env` and loaded via `config.py`:
 | `GOOGLE_REDIRECT_URI` | Must match the redirect URI registered in Google Cloud Console exactly |
 | `FLASK_ENV` | Defaults to `development`; not currently gating anything since `seed.py` was removed |
 | `DASHBOARD_USER` | The founder's **email**. Used once, with `DASHBOARD_PASSWORD`, to bootstrap the first dashboard user. A value without `@` is refused with a printed warning (it was `admin` before S3a, when this variable was read and used by nothing) |
-| `SIGNUP_ENABLED` | Turns the public signup screen on. **Defaults to `false`, and must stay false in production until S3b merges** — see the box at the top. While off, `/dashboard/signup` answers 404 |
+| `SIGNUP_ENABLED` | Turns the public signup screen on. **Defaults to `true` since Module S3b** — the interlock it used to be had nothing left to protect once the reads filtered by tenant. Set it to `"false"` explicitly to close the door in a given environment; while off, `/dashboard/signup` answers 404 |
 | `WHATSAPP_TOKEN` | Meta Cloud API token (currently unused) |
 | `WHATSAPP_PHONE_NUMBER_ID` | Meta Cloud API phone ID (currently unused) |
 
@@ -1234,32 +1350,37 @@ Defined in `src/.env` and loaded via `config.py`:
   gets the `UNIQUE` S1 deferred. The webhook resolves the tenant from Twilio's `To` field,
   degrading to `'default'` with a warning on the Sandbox. **It establishes identity and tenant
   resolution; it does NOT isolate reads.** See `src/tests/test_accounts/ACCOUNTS_TESTING.md`.
-- **Module S3b (next, and it must follow closely)** — Per-tenant read isolation: `tenant_id` on
-  `sessions` and its composite key, `messages`' composite FK, `trial_bookings`' tenant-scoped
-  `UNIQUE`, and `tenant_id` threaded into `get_session`, `save_session`, `get_conversation`,
-  `list_conversations`, `count_unread`, `list_bookings_*` and `list_pending_notifications`. The
-  seam is already in place: `handle_text_message()` and `receive_twilio_owner()` receive the
-  resolved tenant and do not propagate it (grep `# S3b:`). **Until it merges, no second account
-  in production** — see the box at the top of this file.
+- **Module S3b (done)** — Per-tenant read isolation (`src/tests/test_tenant_isolation/`, migration
+  011). `sessions` gains `tenant_id` and a composite primary key, `messages` a composite FK,
+  `trial_bookings` a tenant-scoped `UNIQUE`, and every core read — `get_session`, `save_session`,
+  `clear_session`, `get_conversation`, `list_conversations`, `count_unread`, `mark_conversation_read`,
+  `list_bookings_*`, `get_booking`, `update_booking_status`, `register_owner_response` — takes a
+  `tenant_id` and filters by it. The `# S3b:` seam is closed, the 24 dashboard routes pass
+  `current_user.tenant_id`, the slot cache is keyed per tenant, and the cron resolves the tenant
+  from each notification row. It also fixed two leaks nobody had listed: the Calendar service and
+  the OAuth callback both read/wrote the pilot's row regardless of tenant. **With it the rigid
+  "no second account" rule is retired** — see the box at the top. See
+  `src/tests/test_tenant_isolation/TENANT_ISOLATION_TESTING.md`.
 - **Module S3c (done, shipped disabled)** — Public signup (`/dashboard/signup`,
   `accounts/signup.py`, `accounts/onboarding.py`, migration 010) plus **CSRF across the whole
   application** (Flask-WTF, with `webhook_bp` exempt). A gym owner creates their own account,
   which calls the same `provision_tenant()` the CLI uses, and lands on a derived onboarding
-  checklist. Guarded by a honeypot and a per-IP ceiling counted in Postgres. **Behind
-  `SIGNUP_ENABLED`, which defaults to false** — it must stay off in production until S3b, because
-  a public signup manufactures the very second tenant the reads cannot yet isolate. See
-  `src/tests/test_signup/SIGNUP_TESTING.md`.
+  checklist. Guarded by a honeypot and a per-IP ceiling counted in Postgres. Behind
+  `SIGNUP_ENABLED`, which **shipped defaulting to false** — a hard interlock, since a public signup
+  manufactures the very second tenant the reads could not isolate — and **defaults to true since
+  Module S3b**, which removed the reason. See `src/tests/test_signup/SIGNUP_TESTING.md`.
 - **Future (SaaS phase)** — beyond S3b: a funnel/metrics screen (S4) and billing (S5). Also
   pending: reminders before the class, and multi-operator identity (`users` already accepts two
   rows per tenant, but `messages.author = 'operator'` still cannot say which human replied).
 
 ## Known Issues / TODOs
 
-- **S3a resolves a tenant and then drops it.** `handle_text_message()` and
-  `receive_twilio_owner()` receive `tenant_id` and pass it to nothing: every read below them
-  still runs unfiltered, across all tenants. This is Module S3b's whole job, and it is why no
-  second account may exist in production yet (see the box at the top). Grep `# S3b:` for the
-  exact call sites.
+- **The tenant defaults are a silent failure mode.** Every read in `bot/session.py`,
+  `bot/messages.py`, `bot/bookings.py` and friends takes `tenant_id: str = DEFAULT_TENANT_ID`.
+  That default is what keeps the pilot's callers and the suites unchanged — and it means a NEW
+  caller that forgets the argument does not raise, it quietly reads the pilot's rows. The default
+  was kept deliberately (removing it would break the cron and every suite for no gain), so the
+  guard is review: when you add a call site, pass the tenant.
 - **Logout is a `GET`.** `menu.html`'s "Sair" is an `<a>`, so `/dashboard/logout` answers GET.
   That is CSRF-able in the log-someone-out direction only — annoying, never dangerous —
   and predates S3a.

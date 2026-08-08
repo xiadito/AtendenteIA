@@ -14,6 +14,12 @@ the bot was silent.
 PII: this module never logs message content — only the sender, the author and
 row counts. The repository is public and these rows hold whole conversations.
 
+TENANT SCOPE (Module S3b): `tenant_id` was already stored on every row, and was
+read by nothing. Now every query filters on the (tenant_id, sender) pair, which
+is also the composite foreign key into `sessions` since migration 011. Passing
+the wrong tenant does not raise — it returns an empty conversation, which is why
+the callers hand it down explicitly rather than defaulting at each layer.
+
 ORDERING TRAP: every query sorts by (created_at, id), never created_at alone.
 The column defaults to NOW(), which in Postgres is transaction_timestamp(), so
 rows written inside one transaction share an instant and would come back in an
@@ -75,15 +81,16 @@ def add_message(
     to both the payload builder and the unread count.
 
     Args:
-        sender (str): The lead's number, e.g. "5521999999999". Must already have
-            a sessions row (the FK requires it).
+        sender (str): The lead's number, e.g. "5521999999999". The (tenant_id,
+            sender) pair must already have a sessions row — the composite FK
+            added by migration 011 requires it.
         author (str): One of valid_authors.
         content (str): The message text, stored verbatim. For the AI this is the
             OUTGOING text, with the action block already stripped.
         is_read (bool): Whether the operator has already seen this. Only
             meaningful for author="lead"; pass True for the AI and the operator,
             whose own messages are nothing to catch up on.
-        tenant_id (str): Tenant identifier. Fixed to DEFAULT_TENANT_ID for the pilot.
+        tenant_id (str): The gym this conversation belongs to.
 
     Raises:
         ValueError: If author is not one of valid_authors.
@@ -110,6 +117,7 @@ def get_recent_messages(
     sender: str,
     limit: int,
     since: datetime | None = None,
+    tenant_id: str = DEFAULT_TENANT_ID,
 ) -> list[dict]:
     """Return the tail of a conversation, oldest first, for the LLM payload.
 
@@ -125,6 +133,7 @@ def get_recent_messages(
             this instant are returned. bot/handlers.py passes the session's
             conversation_started_at, so a conversation restarted by the 1h
             inactivity timeout does not replay the previous one to the model.
+        tenant_id (str): The gym this conversation belongs to.
 
     Returns:
         list[dict]: Message rows in chronological order (possibly empty).
@@ -135,11 +144,13 @@ def get_recent_messages(
                 """
                 SELECT id, sender, author, content, is_read, created_at
                 FROM messages
-                WHERE sender = %s AND (%s::timestamptz IS NULL OR created_at >= %s)
+                WHERE tenant_id = %s
+                  AND sender = %s
+                  AND (%s::timestamptz IS NULL OR created_at >= %s)
                 ORDER BY created_at DESC, id DESC
                 LIMIT %s
                 """,
-                (sender, since, since, limit),
+                (tenant_id, sender, since, since, limit),
             )
             rows = cur.fetchall()
 
@@ -147,18 +158,20 @@ def get_recent_messages(
     return [dict(row) for row in reversed(rows)]
 
 
-def get_conversation(sender: str) -> list[dict]:
-    """Return a lead's ENTIRE conversation, oldest first, for the inbox screen.
+def get_conversation(sender: str, tenant_id: str = DEFAULT_TENANT_ID) -> list[dict]:
+    """Return a lead's ENTIRE conversation at one gym, oldest first, for the inbox.
 
-    Deliberately unfiltered and uncapped: the operator taking over needs the
-    whole thread, including whatever came before an inactivity timeout reset the
-    AI's window.
+    Deliberately uncapped in TIME: the operator taking over needs the whole
+    thread, including whatever came before an inactivity timeout reset the AI's
+    window. It is scoped by tenant, though — "the whole thread" means the whole
+    thread at THIS gym, never the same person's conversation somewhere else.
 
     Args:
         sender (str): The lead's number.
+        tenant_id (str): The gym whose copy of the thread to read.
 
     Returns:
-        list[dict]: Every message for this sender, in chronological order.
+        list[dict]: Every message for this (tenant, sender), chronologically.
     """
     with get_connection() as conn:
         with conn.cursor() as cur:
@@ -166,17 +179,17 @@ def get_conversation(sender: str) -> list[dict]:
                 """
                 SELECT id, sender, author, content, is_read, created_at
                 FROM messages
-                WHERE sender = %s
+                WHERE tenant_id = %s AND sender = %s
                 ORDER BY created_at, id
                 """,
-                (sender,),
+                (tenant_id, sender),
             )
             rows = cur.fetchall()
 
     return [dict(row) for row in rows]
 
 
-def mark_conversation_read(sender: str) -> int:
+def mark_conversation_read(sender: str, tenant_id: str = DEFAULT_TENANT_ID) -> int:
     """Clear the unread flag on a lead's messages in one conversation.
 
     Only touches author = 'lead' rows: the AI's and the operator's messages are
@@ -185,6 +198,7 @@ def mark_conversation_read(sender: str) -> int:
 
     Args:
         sender (str): The lead's number.
+        tenant_id (str): The gym whose operator is reading.
 
     Returns:
         int: How many messages were marked read (0 when there was no backlog).
@@ -195,9 +209,9 @@ def mark_conversation_read(sender: str) -> int:
                 """
                 UPDATE messages
                 SET is_read = TRUE
-                WHERE sender = %s AND author = 'lead' AND is_read = FALSE
+                WHERE tenant_id = %s AND sender = %s AND author = 'lead' AND is_read = FALSE
                 """,
-                (sender,),
+                (tenant_id, sender),
             )
             marked: int = cur.rowcount
             conn.commit()
@@ -208,11 +222,12 @@ def mark_conversation_read(sender: str) -> int:
     return marked
 
 
-def count_unread(sender: str) -> int:
+def count_unread(sender: str, tenant_id: str = DEFAULT_TENANT_ID) -> int:
     """Count a lead's messages the operator has not read yet.
 
     Args:
         sender (str): The lead's number.
+        tenant_id (str): The gym asking.
 
     Returns:
         int: Number of unread messages from the lead.
@@ -223,17 +238,17 @@ def count_unread(sender: str) -> int:
                 """
                 SELECT COUNT(*) AS unread_count
                 FROM messages
-                WHERE sender = %s AND author = 'lead' AND is_read = FALSE
+                WHERE tenant_id = %s AND sender = %s AND author = 'lead' AND is_read = FALSE
                 """,
-                (sender,),
+                (tenant_id, sender),
             )
             unread_count: int = cur.fetchone()["unread_count"]
 
     return unread_count
 
 
-def list_conversations() -> list[dict]:
-    """Return one row per conversation for the inbox list.
+def list_conversations(tenant_id: str = DEFAULT_TENANT_ID) -> list[dict]:
+    """Return one row per conversation for ONE GYM's inbox list.
 
     Driven by `sessions`, not by `messages`, so a lead whose session exists but
     who has not said anything yet still shows up instead of vanishing from the
@@ -243,6 +258,14 @@ def list_conversations() -> list[dict]:
     or carrying unread messages floats to the top, and the rest follows by
     recency. Paused and unread share one rank rather than nesting, because a
     paused thread with nothing new still needs to be handed back.
+
+    BOTH LATERALS JOIN ON THE PAIR, not on the sender. Filtering only the outer
+    `sessions` query would still be wrong in the worst possible way: the row list
+    would be this gym's, while the preview text and the unread badge came from
+    whatever the same phone number said at ANOTHER gym.
+
+    Args:
+        tenant_id (str): The gym whose inbox this is.
 
     Returns:
         list[dict]: Rows with sender, is_paused, stage, lead_name, unread_count,
@@ -267,22 +290,25 @@ def list_conversations() -> list[dict]:
                 LEFT JOIN LATERAL (
                     SELECT m.author, m.content, m.created_at
                     FROM messages m
-                    WHERE m.sender = s.sender
+                    WHERE m.tenant_id = s.tenant_id AND m.sender = s.sender
                     ORDER BY m.created_at DESC, m.id DESC
                     LIMIT 1
                 ) last ON TRUE
                 LEFT JOIN LATERAL (
                     SELECT COUNT(*) AS unread_count
                     FROM messages m
-                    WHERE m.sender = s.sender
+                    WHERE m.tenant_id = s.tenant_id
+                      AND m.sender = s.sender
                       AND m.author = 'lead'
                       AND m.is_read = FALSE
                 ) unread ON TRUE
+                WHERE s.tenant_id = %s
                 ORDER BY
                     (s.is_paused OR COALESCE(unread.unread_count, 0) > 0) DESC,
                     last.created_at DESC NULLS LAST,
                     s.updated_at DESC
-                """
+                """,
+                (tenant_id,),
             )
             rows = cur.fetchall()
 

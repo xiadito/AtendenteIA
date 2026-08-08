@@ -382,9 +382,12 @@ mudança de assinatura do `handle_text_message` é invisível para quem chama co
 
 ## O que este módulo deliberadamente **não** faz
 
-- **Isolamento de leitura por tenant.** É o S3b, e é o conserto de verdade. O `tenant_id` chega a
-  `handle_text_message()` e a `receive_twilio_owner()` e **para ali** — os pontos exatos estão
-  marcados com `# S3b:` no `bot/handlers.py`. Daí a regra rígida no topo deste arquivo.
+- **Isolamento de leitura por tenant.** É o S3b, e é o conserto de verdade. Quando este módulo
+  fechou, o `tenant_id` chegava a `handle_text_message()` e a `receive_twilio_owner()` e **parava
+  ali** — os pontos exatos ficaram marcados com `# S3b:` no `bot/handlers.py`. **Isso já foi
+  feito:** o Módulo S3b costurou todos eles e o isolamento existe (ver
+  `tests/test_tenant_isolation/TENANT_ISOLATION_TESTING.md`). A regra rígida que este arquivo
+  descrevia, de não criar uma segunda conta, caiu junto.
 - **Reset de senha pela UI.** É `python -m accounts.provision reset-password`. Não há tela, e não
   há link de "esqueci minha senha".
 - **Cadastro público.** Decisão fechada: cada academia depende de um número aprovado no Twilio,
@@ -407,4 +410,4 @@ mudança de assinatura do `handle_text_message` é invisível para quem chama co
 | `accounts/bootstrap.py` | O primeiro usuário, a partir do `.env`, uma vez. |
 | `integrations/store.py` | `find_tenant_by_whatsapp_number`, `resolve_tenant_by_whatsapp_number`, `get_owner_by_phone_in_tenant`, `update_whatsapp_number` — porque só leem `owners`. |
 | `webhook/routes.py` | `login`/`logout`, e os dois caminhos (sandbox e roteado) do `receive_twilio`. |
-| `bot/handlers.py` | Recebe o `tenant_id` e não o propaga — a costura do S3b, com seis marcadores `# S3b:`. |
+| `bot/handlers.py` | Recebia o `tenant_id` e não o propagava — era a costura do S3b, hoje fechada. |

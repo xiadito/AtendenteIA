@@ -2,6 +2,7 @@ import logging
 import secrets
 
 from flask import Blueprint, redirect, render_template, request, session, url_for
+from flask_login import current_user
 
 import integrations.google_calendar as google_calendar
 import integrations.store as store
@@ -15,8 +16,8 @@ integrations_bp = Blueprint("integrations", __name__)
 @integrations_bp.route("/google", methods=["GET"])
 @require_auth
 def google_status():
-    """Show the current Google Calendar connection status."""
-    owner: dict | None = store.get_owner_credentials()
+    """Show THIS gym's Google Calendar connection status."""
+    owner: dict | None = store.get_owner_credentials(current_user.tenant_id)
     return render_template("integrations_google.html", owner=owner)
 
 
@@ -50,7 +51,7 @@ def google_callback():
         logger.warning("OAuth state mismatch or missing on Google callback.")
         return render_template(
             "integrations_google.html",
-            owner=store.get_owner_credentials(),
+            owner=store.get_owner_credentials(current_user.tenant_id),
             error="Falha de segurança na autenticação. Tente conectar novamente.",
         )
 
@@ -59,7 +60,7 @@ def google_callback():
         logger.warning("Google callback received without an authorization code.")
         return render_template(
             "integrations_google.html",
-            owner=store.get_owner_credentials(),
+            owner=store.get_owner_credentials(current_user.tenant_id),
             error="Autorização do Google cancelada ou incompleta.",
         )
 
@@ -69,21 +70,27 @@ def google_callback():
         logger.error("Failed to complete Google OAuth callback: %s", exc)
         return render_template(
             "integrations_google.html",
-            owner=store.get_owner_credentials(),
+            owner=store.get_owner_credentials(current_user.tenant_id),
             error="Não foi possível concluir a conexão com o Google Calendar.",
         )
 
-    store.save_owner_credentials(google_email=google_email, refresh_token=refresh_token, calendar_id=calendar_id)
+    store.save_owner_credentials(
+        google_email=google_email,
+        refresh_token=refresh_token,
+        calendar_id=calendar_id,
+        tenant_id=current_user.tenant_id,
+    )
     return redirect(url_for("integrations.google_status"))
 
 
 @integrations_bp.route("/google/disconnect", methods=["POST"])
 @require_auth
 def google_disconnect():
-    """Revoke the Google token (best-effort) and clear the stored credentials."""
-    owner: dict | None = store.get_owner_credentials()
+    """Revoke THIS gym's Google token (best-effort) and clear its credentials."""
+    tenant_id: str = current_user.tenant_id
+    owner: dict | None = store.get_owner_credentials(tenant_id)
     if owner and owner.get("refresh_token"):
         google_calendar.revoke_token(owner["refresh_token"])
 
-    store.clear_owner_credentials()
+    store.clear_owner_credentials(tenant_id)
     return redirect(url_for("integrations.google_status"))

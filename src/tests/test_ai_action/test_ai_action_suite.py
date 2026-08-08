@@ -527,13 +527,13 @@ class AiActionSuite:
         slot = _synthetic_slot("suite-adult-1", "ADULTOS", "Segunda, 10/08 às 19:00 — Adultos", None)
         recorded: dict = {}
 
-        def fake_book(event_id: str, lead: dict) -> dict:
+        def fake_book(event_id: str, lead: dict, tenant_id: str = "default") -> dict:
             recorded["event_id"] = event_id
             recorded["lead"] = lead
             return {"status": "created", "booking_id": "x", "active_count": 1, "calendar_synced": True}
 
         sender = self.next_sender()
-        with patched(handlers, "get_cached_slots", lambda days_ahead=14: [slot]), \
+        with patched(handlers, "get_cached_slots", lambda days_ahead=None, tenant_id="default": [slot]), \
                 patched(scheduling, "book_slot", fake_book):
             self.drive(sender, "Quero a de segunda 19h de adultos, sou o João",
                        _raw("Fechado, João!", stage="booked", lead_name="João",
@@ -632,7 +632,7 @@ class AiActionSuite:
         self.drive(sender, "oi", _raw("Oi!", stage="interest", qualification="qualified", action="none"))
         self._age_session(sender, hours=2)
 
-        with patched(handlers, "get_cached_slots", lambda days_ahead=14: []):
+        with patched(handlers, "get_cached_slots", lambda days_ahead=None, tenant_id="default": []):
             self.drive(sender, "posso remarcar?", _raw("Claro! Vi que você já tem uma aula marcada.",
                        stage="greeting", qualification="qualified", action="none"))
         prompt = self.ai.last_system_prompt or ""
@@ -642,7 +642,7 @@ class AiActionSuite:
 
     def test_timeout_notice_in_prompt(self) -> str:
         sender = self.next_sender()
-        with patched(handlers, "get_cached_slots", lambda days_ahead=14: []):
+        with patched(handlers, "get_cached_slots", lambda days_ahead=None, tenant_id="default": []):
             self.drive(sender, "oi", _raw("Olá!", stage="greeting", qualification="unknown", action="none"))
         prompt = (self.ai.last_system_prompt or "").lower()
         expect("1 hour" in prompt or "1h" in prompt, "o aviso de timeout deveria constar na camada protegida")
@@ -666,12 +666,12 @@ class AiActionSuite:
         slot = _synthetic_slot("suite-real-1", "ADULTOS", "Terça, 11/08 às 20:00 — Adultos", None)
         called = {"n": 0}
 
-        def fake_book(event_id: str, lead: dict) -> dict:
+        def fake_book(event_id: str, lead: dict, tenant_id: str = "default") -> dict:
             called["n"] += 1
             return {"status": "created", "booking_id": "x", "active_count": 1, "calendar_synced": True}
 
         sender = self.next_sender()
-        with patched(handlers, "get_cached_slots", lambda days_ahead=14: [slot]), \
+        with patched(handlers, "get_cached_slots", lambda days_ahead=None, tenant_id="default": [slot]), \
                 patched(scheduling, "book_slot", fake_book):
             out = self.drive(sender, "marca esse aí", _raw("Agendado!", stage="booked",
                              lead_name="Ana", qualification="qualified", action="book",
@@ -694,8 +694,8 @@ class AiActionSuite:
     def test_slot_full_recovers(self) -> str:
         slot = _synthetic_slot("suite-full-1", "CRIANCAS", "Quarta, 12/08 às 17:00 — Crianças", 1)
         sender = self.next_sender()
-        with patched(handlers, "get_cached_slots", lambda days_ahead=14: [slot]), \
-                patched(scheduling, "book_slot", lambda e, l: {"status": "full", "active_count": 4}):
+        with patched(handlers, "get_cached_slots", lambda days_ahead=None, tenant_id="default": [slot]), \
+                patched(scheduling, "book_slot", lambda e, l, tenant_id="default": {"status": "full", "active_count": 4}):
             out = self.drive(sender, "marca essa", _raw("Agendado!", stage="booked",
                              lead_name="Bia", child_name="Lu", qualification="qualified",
                              action="book", event_id="suite-full-1"))
@@ -706,8 +706,8 @@ class AiActionSuite:
     def test_duplicate_booking(self) -> str:
         slot = _synthetic_slot("suite-dup-1", "ADULTOS", "Quinta, 13/08 às 19:00 — Adultos", None)
         sender = self.next_sender()
-        with patched(handlers, "get_cached_slots", lambda days_ahead=14: [slot]), \
-                patched(scheduling, "book_slot", lambda e, l: {"status": "duplicate"}):
+        with patched(handlers, "get_cached_slots", lambda days_ahead=None, tenant_id="default": [slot]), \
+                patched(scheduling, "book_slot", lambda e, l, tenant_id="default": {"status": "duplicate"}):
             out = self.drive(sender, "marca de novo", _raw("Agendado!", stage="booked",
                              lead_name="Rui", qualification="qualified", action="book",
                              event_id="suite-dup-1"))
@@ -717,7 +717,7 @@ class AiActionSuite:
     def test_calendar_disconnected(self) -> str:
         """Disconnected calendar → get_cached_slots returns [] → AI keeps talking."""
         sender = self.next_sender()
-        with patched(handlers, "get_cached_slots", lambda days_ahead=14: []):
+        with patched(handlers, "get_cached_slots", lambda days_ahead=None, tenant_id="default": []):
             out = self.drive(sender, "quero uma aula", _raw("Oi! Me conta o que procura 🙂",
                              stage="interest", qualification="unknown", action="none"))
         expect(out is not None, "a conversa deveria continuar mesmo sem calendário")

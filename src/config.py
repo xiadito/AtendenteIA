@@ -31,13 +31,23 @@ class Config:
     DASHBOARD_USER = os.environ.get("DASHBOARD_USER")
     DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD")
 
-    # Public self-service signup (Module S3c). DEFAULTS TO FALSE, and the default
-    # is the whole safety story: whoever forgets to set this is closed, never
-    # open. Turning it on creates a SECOND TENANT the moment somebody signs up,
-    # and until Module S3b merges the reads do not filter by tenant — so every
-    # new gym would see the pilot's conversations and bookings.
-    # DO NOT SET THIS TO true BEFORE S3b.
-    SIGNUP_ENABLED = os.environ.get("SIGNUP_ENABLED", "false").strip().lower() == "true"
+    # Public self-service signup (Module S3c), OPEN BY DEFAULT since Module S3b.
+    #
+    # It shipped closed, and the default was the whole safety story: a public
+    # signup does not risk a second tenant, it MANUFACTURES them, and until S3b
+    # the reads did not filter by tenant. S3b closed that — sessions is keyed by
+    # (tenant_id, sender) and every core read filters — so the interlock had
+    # nothing left to protect and the founder opened the door.
+    #
+    # WHAT THE FLAG STILL DOES NOT DO: a gym that signs up cannot receive a
+    # single WhatsApp message until its Twilio Sender is approved by hand and
+    # `whatsapp_number` is set (python -m accounts.provision set-whatsapp-number).
+    # That is the last, buttonless line of /dashboard/onboarding, and it is what
+    # keeps a signup from becoming a working gym on its own.
+    #
+    # The default is now permissive, so an environment that wants the door shut
+    # has to say so explicitly: SIGNUP_ENABLED="false".
+    SIGNUP_ENABLED = os.environ.get("SIGNUP_ENABLED", "true").strip().lower() == "true"
 
     #google calendar
     GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")

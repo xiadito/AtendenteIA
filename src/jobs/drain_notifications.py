@@ -5,6 +5,17 @@ started as `python -m jobs.drain_notifications` on a `* * * * *` schedule
 with root directory `src/`. Railway's cron skips overlapping runs, so this
 module does not use an advisory lock — it only needs to do its work and
 exit, without leaving a server, a thread, or an open connection behind.
+
+THE TENANT COMES FROM THE ROW (Module S3b). This process runs outside Flask
+entirely: there is no request, no current_user, and nothing to read a "current"
+tenant from — and assuming the pilot's would name another gym's classes in a
+message their owner receives. The queue is drained globally, in one pass, and
+each notification is composed against the tenant_id stored on it.
+
+Class labels are loaded ONCE PER TENANT, not once per run and not once per row.
+Once per run was right while one gym existed; once per row would be a query per
+notification. The small dict below is the middle, and it is deliberately local to
+main() so it cannot outlive the run and go stale.
 """
 
 import logging
@@ -26,17 +37,19 @@ def _compose_message(notification: dict, class_labels: dict[str, str]) -> str:
     """Build the Portuguese WhatsApp text for one pending notification.
 
     Args:
-        notification (dict): A row from owner_notifications.
-        class_labels (dict[str, str]): marker → label, loaded once by main().
-            Passed in because this is called once per pending row, and since
-            Module S2 the labels come from the database — reading them here
-            would be one query per notification.
+        notification (dict): A row from owner_notifications, including the
+            tenant_id this notification belongs to.
+        class_labels (dict[str, str]): marker → label FOR THAT TENANT, resolved
+            by main() and passed in because this is called once per pending row
+            — reading them here would be one query per notification.
 
     Returns:
         str: The message to send to the owner.
     """
     if notification["event_type"] == "booking":
-        booking = bookings.get_booking(notification["booking_id"])
+        booking = bookings.get_booking(
+            notification["booking_id"], tenant_id=notification["tenant_id"]
+        )
         if booking is None:
             return "Uma reserva foi feita, mas não encontrei os detalhes. Confira no painel."
 
@@ -70,19 +83,23 @@ def main() -> int:
 
     try:
         pending = owner_notifications.list_pending_notifications(MAX_ATTEMPTS)
-        # Loaded once for the whole drain, before the loop. This runs outside
-        # Flask entirely (Railway cron), which is why bot/class_types.py reads
-        # straight through get_connection() with an explicit tenant.
-        class_labels: dict[str, str] = class_types.load_class_types()["labels"]
     except Exception:
         logger.exception("Could not list pending owner notifications; aborting this run.")
         return 1
 
     logger.info("Draining %d pending owner notification(s).", len(pending))
 
+    # marker → label, per tenant, filled lazily as the drain meets each gym. A
+    # run touching one gym costs exactly one read, as it did before S3b.
+    labels_by_tenant: dict[str, dict[str, str]] = {}
+
     for notification in pending:
         try:
-            text = _compose_message(notification, class_labels)
+            tenant_id: str = notification["tenant_id"]
+            if tenant_id not in labels_by_tenant:
+                labels_by_tenant[tenant_id] = class_types.load_class_types(tenant_id)["labels"]
+
+            text = _compose_message(notification, labels_by_tenant[tenant_id])
             whatsapp_service.send_message(notification["owner_phone"], text)
             owner_notifications.mark_sent(notification["id"])
             logger.info("Notification %s delivered to owner.", notification["id"])

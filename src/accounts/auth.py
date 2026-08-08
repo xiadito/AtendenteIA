@@ -40,10 +40,15 @@ class User(UserMixin):
     exception: UserMixin is how Flask-Login is meant to be used, and hand-rolling
     is_authenticated / get_id would be reimplementing a library for no reason.
 
-    `tenant_id` IS THE MODULE S3b SEAM. Every protected route can already read
-    `current_user.tenant_id`; NO READ FILTERS BY IT YET. Wiring it into
-    `list_conversations()`, `get_conversation()`, `list_bookings_for_review()`
-    and the rest is S3b's entire job.
+    `tenant_id` IS WHAT ISOLATES THE DASHBOARD. Every protected route reads it
+    and hands it to the data layer — `list_conversations()`, `get_conversation()`,
+    `list_bookings_for_review()`, the settings screen, the Google Calendar
+    connection — so a logged-in owner can only ever see and write their own gym's
+    rows. That wiring was Module S3b's job and it is done.
+
+    The tenant is always PASSED DOWN as an argument, never read from here by the
+    data layer (decision 14A): bot/ and integrations/ also run under the cron and
+    the webhook, where there is no current_user at all.
     """
 
     def __init__(self, row: dict) -> None:

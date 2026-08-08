@@ -222,17 +222,17 @@ def receive_twilio_owner(
     notification returns None and there is nothing left to answer — which is
     what makes a second "1" harmless.
 
-    MODULE S3b SEAM: tenant_id arrives resolved from the "To" field and goes no
-    further. register_owner_response() still looks the notification up by phone
-    alone and confirm_or_cancel_booking() still reads trial_bookings globally —
-    scoping those is S3b's job, and doing it here would be a half-isolation.
+    Since Module S3b the resolved tenant is carried all the way down: the open
+    notification is looked up INSIDE this gym, and the booking is closed inside
+    it too. That is what stops gym B's owner — whose "1" arrived on gym B's
+    number — from ever confirming a class of gym A's.
 
     Args:
         owner_phone (str): The owner's number, already in clean_number form.
         body (str): The raw text the owner sent.
-        tenant_id (str): The gym this reply belongs to. Received, not yet
-            propagated (see above). Defaults to the pilot tenant so the manual
-            CLIs and the test suites can keep calling with two arguments.
+        tenant_id (str): The gym this reply belongs to, resolved from the "To"
+            field. Defaults to the pilot tenant so the manual CLIs and the test
+            suites can keep calling with two arguments.
     """
     stripped = body.strip()
     mapping = {"1": "confirmed", "2": "cancelled"}
@@ -243,15 +243,13 @@ def receive_twilio_owner(
         send_message(owner_phone, "Não entendi. Responda 1 para confirmar ou 2 para cancelar.")
         return
 
-    # S3b: scope this lookup to tenant_id.
-    row = owner_notifications.register_owner_response(owner_phone, response)
+    row = owner_notifications.register_owner_response(owner_phone, response, tenant_id=tenant_id)
     if row is None:
         logger.warning(f"Owner {owner_phone} replied '{stripped}' but no open notification was found.")
         return
 
     if row["event_type"] == "booking" and row["booking_id"]:
-        # S3b: pass tenant_id here.
-        confirmations.confirm_or_cancel_booking(row["booking_id"], response)
+        confirmations.confirm_or_cancel_booking(row["booking_id"], response, tenant_id=tenant_id)
 
 
 @webhook_bp.route("/", methods=["GET"])
@@ -323,10 +321,12 @@ def signup():
     fallback `class_types` row, `scheduling_configs` and `users` in ONE
     transaction. Nothing about what a tenant needs lives here.
 
-    ⛔ BEHIND A FLAG THAT DEFAULTS TO OFF. A public signup does not merely risk a
-    second tenant — it MANUFACTURES them, and until Module S3b merges the reads
-    do not filter by tenant, so every gym that signed up would see the pilot's
-    conversations and bookings. `SIGNUP_ENABLED` stays false until S3b.
+    BEHIND A FLAG THAT NOW DEFAULTS TO ON. A public signup does not merely risk a
+    second tenant — it MANUFACTURES them, which was disqualifying while the reads
+    ran unfiltered. Module S3b closed that, and the flag was flipped: it was an
+    interlock, not a feature toggle, and it had nothing left to protect. A gym
+    that signs up still cannot receive a message until its Twilio Sender is
+    approved by hand — the last, buttonless line of /dashboard/onboarding.
 
     404, NOT 403, WHEN DISABLED, and before anything else runs: 403 advertises
     that there is something here to come back for.
@@ -501,10 +501,10 @@ INBOX_POLL_SECONDS: int = 5
 @dashboard_bp.route("/inbox")
 @require_auth
 def inbox():
-    """Lista todas as conversas, pausadas e não lidas no topo."""
+    """Lista as conversas DESTA academia, pausadas e não lidas no topo."""
     return render_template(
         "inbox.html",
-        conversations=messages.list_conversations(),
+        conversations=messages.list_conversations(current_user.tenant_id),
         poll_seconds=INBOX_POLL_SECONDS,
     )
 
@@ -517,17 +517,24 @@ def inbox_conversations():
     Separada da página para que o polling troque só as linhas, sem recarregar
     o <head>, o tema e o script a cada ciclo.
     """
-    return render_template("_inbox_list.html", conversations=messages.list_conversations())
+    return render_template(
+        "_inbox_list.html",
+        conversations=messages.list_conversations(current_user.tenant_id),
+    )
 
 
-def _require_conversation(sender: str) -> None:
-    """Aborta com 404 se o número da URL não tem sessão.
+def _require_conversation(sender: str, tenant_id: str) -> None:
+    """Aborta com 404 se o número da URL não tem sessão NESTA academia.
 
     As rotas do inbox recebem o `sender` pela URL. Usar get_session() aqui
     criaria uma sessão para qualquer número digitado — uma conversa fantasma que
     passaria a aparecer na lista do operador. Esta checagem é só leitura.
+
+    Desde o Módulo S3b ela também é a porta do isolamento: um lead da academia B
+    simplesmente não existe sob o tenant da academia A, então digitar o número
+    dele na URL responde 404 em vez de abrir a conversa alheia.
     """
-    if not session_store.session_exists(sender):
+    if not session_store.session_exists(sender, tenant_id=tenant_id):
         abort(404)
 
 
@@ -535,15 +542,16 @@ def _require_conversation(sender: str) -> None:
 @require_auth
 def inbox_conversation(sender: str):
     """Abre uma conversa e marca as mensagens do lead como lidas."""
-    _require_conversation(sender)
-    state = session_store.get_session(sender)
-    messages.mark_conversation_read(sender)
+    tenant_id: str = current_user.tenant_id
+    _require_conversation(sender, tenant_id)
+    state = session_store.get_session(sender, tenant_id=tenant_id)
+    messages.mark_conversation_read(sender, tenant_id=tenant_id)
 
     return render_template(
         "conversation.html",
         sender=sender,
         state=state,
-        conversation=messages.get_conversation(sender),
+        conversation=messages.get_conversation(sender, tenant_id=tenant_id),
         poll_seconds=INBOX_POLL_SECONDS,
     )
 
@@ -556,9 +564,13 @@ def inbox_conversation_messages(sender: str):
     Também marca como lidas: se o operador está com a conversa aberta na tela,
     ele está lendo o que chega.
     """
-    _require_conversation(sender)
-    messages.mark_conversation_read(sender)
-    return render_template("_conversation_messages.html", conversation=messages.get_conversation(sender))
+    tenant_id: str = current_user.tenant_id
+    _require_conversation(sender, tenant_id)
+    messages.mark_conversation_read(sender, tenant_id=tenant_id)
+    return render_template(
+        "_conversation_messages.html",
+        conversation=messages.get_conversation(sender, tenant_id=tenant_id),
+    )
 
 
 @dashboard_bp.route("/inbox/<sender>/reply", methods=["POST"])
@@ -577,11 +589,14 @@ def inbox_reply(sender: str):
     um aviso dentro do HTML, com status 200: o HTMX não faz swap em 4xx/5xx, e
     um 500 nu deixaria o operador olhando uma tela muda sem saber se enviou.
     """
-    _require_conversation(sender)
+    tenant_id: str = current_user.tenant_id
+    _require_conversation(sender, tenant_id)
     text: str = request.form.get("text", "").strip()
 
     if not text:
-        return _conversation_messages_response(sender, error="Digite uma mensagem antes de enviar.")
+        return _conversation_messages_response(
+            sender, tenant_id, error="Digite uma mensagem antes de enviar."
+        )
 
     try:
         send_message(sender, text)
@@ -589,11 +604,12 @@ def inbox_reply(sender: str):
         logger.exception(f"Falha ao enviar resposta do operador para {sender}")
         return _conversation_messages_response(
             sender,
+            tenant_id,
             error="Não foi possível enviar a mensagem. Verifique a conexão e tente de novo.",
         )
 
-    messages.add_message(sender, "operator", text, is_read=True)
-    return _conversation_messages_response(sender)
+    messages.add_message(sender, "operator", text, is_read=True, tenant_id=tenant_id)
+    return _conversation_messages_response(sender, tenant_id)
 
 
 @dashboard_bp.route("/inbox/<sender>/resume", methods=["POST"])
@@ -609,18 +625,19 @@ def inbox_resume(sender: str):
     não recebe um valor que nunca viu — e arma needs_resume_note para que o
     próximo prompt avise que um humano acabou de devolver a conversa.
     """
-    _require_conversation(sender)
-    state = session_store.get_session(sender)
+    tenant_id: str = current_user.tenant_id
+    _require_conversation(sender, tenant_id)
+    state = session_store.get_session(sender, tenant_id=tenant_id)
     state["is_paused"] = False
     state["stage"] = "interest"
     state["needs_resume_note"] = True
-    session_store.save_session(sender, state)
+    session_store.save_session(sender, state, tenant_id=tenant_id)
 
     logger.info(f"Conversa de {sender} devolvida à IA pelo operador.")
     return redirect(url_for("dashboard.inbox_conversation", sender=sender))
 
 
-def _conversation_messages_response(sender: str, error: str | None = None):
+def _conversation_messages_response(sender: str, tenant_id: str, error: str | None = None):
     """Renderiza a parcial de mensagens, com um aviso opcional ao operador.
 
     No sucesso devolve o header `HX-Trigger: reply-sent`, que é o que limpa o
@@ -630,6 +647,9 @@ def _conversation_messages_response(sender: str, error: str | None = None):
 
     Args:
         sender (str): Número do lead.
+        tenant_id (str): Academia do operador logado. Recebido por parâmetro, e
+            não lido de current_user aqui dentro, para que a camada de dados
+            nunca dependa do contexto de request (decisão 14A).
         error (str | None): Mensagem de erro a exibir, em português.
 
     Returns:
@@ -637,7 +657,7 @@ def _conversation_messages_response(sender: str, error: str | None = None):
     """
     html = render_template(
         "_conversation_messages.html",
-        conversation=messages.get_conversation(sender),
+        conversation=messages.get_conversation(sender, tenant_id=tenant_id),
         error=error,
     )
     headers = {} if error else {"HX-Trigger": "reply-sent"}
@@ -661,14 +681,17 @@ def _conversation_messages_response(sender: str, error: str | None = None):
 #
 
 
-def _bookings_context(notice: dict | None = None) -> dict:
+def _bookings_context(tenant_id: str, notice: dict | None = None) -> dict:
     """Monta o contexto da lista de agendamentos, sempre com os rótulos de aula.
 
     Os três pontos que renderizam a lista precisam do mesmo par (linhas +
     rótulos): esquecer `class_labels` em um deles imprimiria "CRIANCAS" cru na
-    tela do dono.
+    tela do dono. Desde o Módulo S3b os dois lados vêm do MESMO tenant — linhas
+    de uma academia com rótulos de outra imprimiriam o marcador cru pelo mesmo
+    motivo, só que sem nada na tela denunciando a troca.
 
     Args:
+        tenant_id (str): Academia do dono logado.
         notice (dict | None): Aviso a exibir no topo, como
             {"kind": "success|warning|error", "text": str}.
 
@@ -676,8 +699,8 @@ def _bookings_context(notice: dict | None = None) -> dict:
         dict: kwargs para render_template.
     """
     return {
-        "bookings": bookings.list_bookings_for_review(),
-        "class_labels": class_types.load_class_types()["labels"],
+        "bookings": bookings.list_bookings_for_review(tenant_id),
+        "class_labels": class_types.load_class_types(tenant_id)["labels"],
         "notice": notice,
     }
 
@@ -685,8 +708,8 @@ def _bookings_context(notice: dict | None = None) -> dict:
 @dashboard_bp.route("/bookings")
 @require_auth
 def bookings_review():
-    """Lista os agendamentos, pendentes de confirmação no topo."""
-    return render_template("bookings.html", **_bookings_context())
+    """Lista os agendamentos DESTA academia, pendentes de confirmação no topo."""
+    return render_template("bookings.html", **_bookings_context(current_user.tenant_id))
 
 
 @dashboard_bp.route("/bookings/list")
@@ -697,30 +720,34 @@ def bookings_list():
     Separada da página pelo mesmo motivo do inbox: o swap troca as linhas sem
     recarregar o <head>, o tema e o script.
     """
-    return render_template("_bookings_list.html", **_bookings_context())
+    return render_template("_bookings_list.html", **_bookings_context(current_user.tenant_id))
 
 
 @dashboard_bp.route("/bookings/<booking_id>/confirm", methods=["POST"])
 @require_auth
 def bookings_confirm(booking_id: str):
     """Confirma um agendamento pelo painel."""
-    return _booking_decision_response(booking_id, "confirmed")
+    return _booking_decision_response(booking_id, "confirmed", current_user.tenant_id)
 
 
 @dashboard_bp.route("/bookings/<booking_id>/cancel", methods=["POST"])
 @require_auth
 def bookings_cancel(booking_id: str):
     """Cancela um agendamento pelo painel."""
-    return _booking_decision_response(booking_id, "cancelled")
+    return _booking_decision_response(booking_id, "cancelled", current_user.tenant_id)
 
 
-def _booking_decision_response(booking_id: str, decision: str):
+def _booking_decision_response(booking_id: str, decision: str, tenant_id: str):
     """Aplica a decisão do dono pela coordenadora e redesenha a lista.
 
     A regra de fechamento não mora aqui: esta função chama
     confirmations.confirm_or_cancel_booking() e traduz o resultado. O guard de
     transição vem junto — clicar duas vezes cai em "skipped" sem que a rota
     precise checar nada.
+
+    O `booking_id` vem da URL, então o tenant viaja junto como GUARDA: um id de
+    outra academia responde "não encontrado", exatamente como um id inexistente
+    — e é a mesma tela que a rota já sabia desenhar.
 
     Agir pelo painel também carimba o owner_response da notificação daquele
     agendamento, quando existe uma em aberto. Sem isso, uma reserva resolvida na
@@ -733,11 +760,12 @@ def _booking_decision_response(booking_id: str, decision: str):
     Args:
         booking_id (str): Id do agendamento vindo da URL.
         decision (str): "confirmed" ou "cancelled".
+        tenant_id (str): Academia do dono logado.
 
     Returns:
         tuple: (HTML da parcial, 200).
     """
-    result = confirmations.confirm_or_cancel_booking(booking_id, decision)
+    result = confirmations.confirm_or_cancel_booking(booking_id, decision, tenant_id=tenant_id)
 
     if result["result"] == "not_found":
         notice = {"kind": "error", "text": "Agendamento não encontrado. A lista foi atualizada."}
@@ -745,14 +773,14 @@ def _booking_decision_response(booking_id: str, decision: str):
         already = "confirmado" if result["status"] == "confirmed" else "cancelado"
         notice = {"kind": "warning", "text": f"Este agendamento já estava {already}. Nada foi alterado."}
     else:
-        owner_notifications.register_response_for_booking(booking_id, decision)
+        owner_notifications.register_response_for_booking(booking_id, decision, tenant_id=tenant_id)
         done = "confirmado" if decision == "confirmed" else "cancelado"
         notice = {"kind": "success", "text": f"Agendamento {done}."}
         if not result["lead_notified"]:
             notice["kind"] = "warning"
             notice["text"] += " Não consegui avisar o lead pelo WhatsApp — avise por outro canal."
 
-    return render_template("_bookings_list.html", **_bookings_context(notice)), 200
+    return render_template("_bookings_list.html", **_bookings_context(tenant_id, notice)), 200
 
 
 #
@@ -788,10 +816,17 @@ _AI_CONFIG_FIELDS: tuple[str, ...] = (
 )
 
 
-def _settings_context(notice: dict | None = None, ai_form: dict[str, str] | None = None) -> dict:
-    """Monta o contexto das duas seções da tela de configurações.
+def _settings_context(
+    tenant_id: str,
+    notice: dict | None = None,
+    ai_form: dict[str, str] | None = None,
+) -> dict:
+    """Monta o contexto das seções da tela de configurações, para uma academia.
 
     Args:
+        tenant_id (str): Academia do dono logado. Antes do Módulo S3b esta tela
+            lia e gravava sempre no tenant piloto: o dono da academia B abriria
+            a personalidade da IA do piloto, e salvá-la sobrescreveria a dele.
         notice (dict | None): Aviso a exibir no topo, como
             {"kind": "success|warning|error", "text": str}.
         ai_form (dict[str, str] | None): Valores a mostrar nos campos da IA em vez
@@ -801,16 +836,16 @@ def _settings_context(notice: dict | None = None, ai_form: dict[str, str] | None
     Returns:
         dict: kwargs para render_template.
     """
-    owner: dict | None = store.get_owner_credentials()
-    notification_owner: dict | None = store.get_owner_for_notification()
+    owner: dict | None = store.get_owner_credentials(tenant_id)
+    notification_owner: dict | None = store.get_owner_for_notification(tenant_id)
 
     return {
-        "ai_config": ai_form if ai_form is not None else ai_configs.get_ai_config(),
+        "ai_config": ai_form if ai_form is not None else ai_configs.get_ai_config(tenant_id),
         "owner_phone": notification_owner["owner_phone"] if notification_owner else None,
         "integration_status": owner["integration_status"] if owner else "disconnected",
         "google_email": owner["google_email"] if owner else None,
-        "class_types": class_types.list_class_types(),
-        "days_ahead": class_types.get_scheduling_config()["days_ahead"],
+        "class_types": class_types.list_class_types(tenant_id),
+        "days_ahead": class_types.get_scheduling_config(tenant_id)["days_ahead"],
         "min_days_ahead": class_types.MIN_DAYS_AHEAD,
         "max_days_ahead": class_types.MAX_DAYS_AHEAD,
         "notice": notice,
@@ -821,7 +856,7 @@ def _settings_context(notice: dict | None = None, ai_form: dict[str, str] | None
 @require_auth
 def settings():
     """Tela de configurações: personalidade da IA e dados da conta."""
-    return render_template("settings.html", **_settings_context())
+    return render_template("settings.html", **_settings_context(current_user.tenant_id))
 
 
 @dashboard_bp.route("/settings/ai", methods=["POST"])
@@ -836,20 +871,25 @@ def settings_save_ai():
     Os cinco campos são obrigatórios porque todos são interpolados no prompt: um
     vazio deixaria a IA sem nome, sem tom ou sem os dados do negócio.
     """
+    tenant_id: str = current_user.tenant_id
     submitted: dict[str, str] = {
         field: request.form.get(field, "").strip() for field in _AI_CONFIG_FIELDS
     }
 
     if not all(submitted.values()):
         notice = {"kind": "error", "text": "Preencha todos os campos da IA antes de salvar."}
-        return render_template("settings.html", **_settings_context(notice, ai_form=submitted)), 200
+        return render_template(
+            "settings.html", **_settings_context(tenant_id, notice, ai_form=submitted)
+        ), 200
 
-    if not ai_configs.update_ai_config(**submitted):
+    if not ai_configs.update_ai_config(**submitted, tenant_id=tenant_id):
         notice = {"kind": "error", "text": "Não encontrei a configuração desta academia para salvar."}
-        return render_template("settings.html", **_settings_context(notice, ai_form=submitted)), 200
+        return render_template(
+            "settings.html", **_settings_context(tenant_id, notice, ai_form=submitted)
+        ), 200
 
     notice = {"kind": "success", "text": "Configuração da IA salva. Vale a partir da próxima mensagem."}
-    return render_template("settings.html", **_settings_context(notice)), 200
+    return render_template("settings.html", **_settings_context(tenant_id, notice)), 200
 
 
 @dashboard_bp.route("/settings/account", methods=["POST"])
@@ -871,9 +911,14 @@ def settings_save_account():
     A guarda (b) consulta `sessions`, e não `owners`, de propósito: o perigo não é
     haver dois donos com o mesmo número, é um número ser lead e dono ao mesmo
     tempo — aí o roteamento tem duas respostas certas e escolhe a do dono,
-    sequestrando a conversa do lead. (A unicidade entre donos é assunto da
-    constraint UNIQUE que ainda não existe; ver CLAUDE.md.)
+    sequestrando a conversa do lead. Desde o Módulo S3a `owner_phone` também tem
+    UNIQUE no banco, que cobre a unicidade entre donos.
+
+    A guarda (b) é checada DENTRO desta academia: o mesmo número pode ser lead na
+    academia B e dono na A sem ambiguidade nenhuma, porque `receive_twilio()`
+    resolve o tenant pelo "To" antes de perguntar quem escreveu.
     """
+    tenant_id: str = current_user.tenant_id
     normalized: str | None = store.normalize_owner_phone(request.form.get("owner_phone", ""))
 
     if normalized is None:
@@ -881,9 +926,9 @@ def settings_save_account():
             "kind": "error",
             "text": "Número inválido. Use o formato com DDI e DDD, por exemplo 5521999999999.",
         }
-        return render_template("settings.html", **_settings_context(notice)), 200
+        return render_template("settings.html", **_settings_context(tenant_id, notice)), 200
 
-    if session_store.session_exists(normalized):
+    if session_store.session_exists(normalized, tenant_id=tenant_id):
         notice = {
             "kind": "error",
             "text": (
@@ -892,14 +937,14 @@ def settings_save_account():
                 "virarem confirmações de agendamento. Nada foi alterado."
             ),
         }
-        return render_template("settings.html", **_settings_context(notice)), 200
+        return render_template("settings.html", **_settings_context(tenant_id, notice)), 200
 
-    if not store.update_owner_phone(normalized):
+    if not store.update_owner_phone(normalized, tenant_id=tenant_id):
         notice = {"kind": "error", "text": "Não encontrei o cadastro desta academia para salvar."}
-        return render_template("settings.html", **_settings_context(notice)), 200
+        return render_template("settings.html", **_settings_context(tenant_id, notice)), 200
 
     notice = {"kind": "success", "text": "Número do dono salvo."}
-    return render_template("settings.html", **_settings_context(notice)), 200
+    return render_template("settings.html", **_settings_context(tenant_id, notice)), 200
 
 
 # --- Seção "Aulas" (Module S2) ---------------------------------------------
@@ -910,7 +955,7 @@ def settings_save_account():
 # bot/class_types.py, para valerem também para quem escrever por SQL.
 
 
-def _settings_error(text: str) -> tuple[str, int]:
+def _settings_error(text: str, tenant_id: str) -> tuple[str, int]:
     """Re-renderiza a tela com um aviso de erro, sempre 200.
 
     200 e não 4xx pelo mesmo motivo do inbox: o dono precisa ver a página com o
@@ -918,11 +963,14 @@ def _settings_error(text: str) -> tuple[str, int]:
 
     Args:
         text (str): O aviso, em português.
+        tenant_id (str): Academia do dono logado.
 
     Returns:
         tuple[str, int]: (HTML, 200).
     """
-    return render_template("settings.html", **_settings_context({"kind": "error", "text": text})), 200
+    return render_template(
+        "settings.html", **_settings_context(tenant_id, {"kind": "error", "text": text})
+    ), 200
 
 
 def _parse_capacity(raw: str) -> tuple[bool, int | None]:
@@ -967,6 +1015,7 @@ def settings_create_class_type():
     sejam o mesmo tipo — e que um marcador com número ou espaço, que o regex do
     título nunca casaria, seja recusado em vez de virar um tipo invisível.
     """
+    tenant_id: str = current_user.tenant_id
     marker: str | None = class_types.normalize_marker(request.form.get("marker", ""))
     label: str = request.form.get("label", "").strip()
     valid_capacity, capacity = _parse_capacity(request.form.get("capacity", ""))
@@ -975,20 +1024,29 @@ def settings_create_class_type():
     if marker is None:
         return _settings_error(
             "Marcador inválido. Use só letras, sem números, espaços ou símbolos — "
-            "é ele que vai entre colchetes no título do evento, como [CRIANCAS]."
+            "é ele que vai entre colchetes no título do evento, como [CRIANCAS].",
+            tenant_id,
         )
 
     if not label:
-        return _settings_error("Informe o nome da turma como o aluno deve ler, por exemplo Crianças.")
+        return _settings_error(
+            "Informe o nome da turma como o aluno deve ler, por exemplo Crianças.", tenant_id
+        )
 
     if not valid_capacity:
-        return _settings_error("Capacidade inválida. Use um número inteiro a partir de 1, ou deixe vazio para ilimitado.")
+        return _settings_error(
+            "Capacidade inválida. Use um número inteiro a partir de 1, ou deixe vazio para ilimitado.",
+            tenant_id,
+        )
 
-    if class_types.create_class_type(marker, label, capacity, requires_child_name) == "duplicate":
-        return _settings_error(f"Já existe uma turma com o marcador [{marker}].")
+    created = class_types.create_class_type(
+        marker, label, capacity, requires_child_name, tenant_id=tenant_id
+    )
+    if created == "duplicate":
+        return _settings_error(f"Já existe uma turma com o marcador [{marker}].", tenant_id)
 
     notice: dict = {"kind": "success", "text": f"Turma [{marker}] cadastrada."}
-    return render_template("settings.html", **_settings_context(notice)), 200
+    return render_template("settings.html", **_settings_context(tenant_id, notice)), 200
 
 
 @dashboard_bp.route("/settings/class-types/<marker>", methods=["POST"])
@@ -1000,29 +1058,38 @@ def settings_save_class_type(marker: str):
     título de cada evento do Calendar. Renomeá-lo aqui deixaria todos os eventos
     existentes órfãos, caindo na turma padrão sem ninguém perceber.
     """
+    tenant_id: str = current_user.tenant_id
     label: str = request.form.get("label", "").strip()
     valid_capacity, capacity = _parse_capacity(request.form.get("capacity", ""))
     requires_child_name: bool = request.form.get("requires_child_name") == "on"
 
     if not label:
-        return _settings_error("Informe o nome da turma como o aluno deve ler, por exemplo Crianças.")
+        return _settings_error(
+            "Informe o nome da turma como o aluno deve ler, por exemplo Crianças.", tenant_id
+        )
 
     if not valid_capacity:
-        return _settings_error("Capacidade inválida. Use um número inteiro a partir de 1, ou deixe vazio para ilimitado.")
+        return _settings_error(
+            "Capacidade inválida. Use um número inteiro a partir de 1, ou deixe vazio para ilimitado.",
+            tenant_id,
+        )
 
-    if not class_types.update_class_type(marker, label, capacity, requires_child_name):
-        return _settings_error(f"Não encontrei a turma [{marker}] para salvar.")
+    if not class_types.update_class_type(
+        marker, label, capacity, requires_child_name, tenant_id=tenant_id
+    ):
+        return _settings_error(f"Não encontrei a turma [{marker}] para salvar.", tenant_id)
 
     notice: dict = {"kind": "success", "text": f"Turma [{marker}] salva."}
-    return render_template("settings.html", **_settings_context(notice)), 200
+    return render_template("settings.html", **_settings_context(tenant_id, notice)), 200
 
 
 @dashboard_bp.route("/settings/class-types/<marker>/fallback", methods=["POST"])
 @require_auth
 def settings_set_fallback_class_type(marker: str):
     """Define qual turma recebe os eventos sem marcador reconhecido no título."""
-    if not class_types.set_fallback_class_type(marker):
-        return _settings_error(f"Não encontrei a turma [{marker}].")
+    tenant_id: str = current_user.tenant_id
+    if not class_types.set_fallback_class_type(marker, tenant_id=tenant_id):
+        return _settings_error(f"Não encontrei a turma [{marker}].", tenant_id)
 
     notice: dict = {
         "kind": "success",
@@ -1031,7 +1098,7 @@ def settings_set_fallback_class_type(marker: str):
             "passam a ser tratados como dessa turma."
         ),
     }
-    return render_template("settings.html", **_settings_context(notice)), 200
+    return render_template("settings.html", **_settings_context(tenant_id, notice)), 200
 
 
 @dashboard_bp.route("/settings/class-types/<marker>/delete", methods=["POST"])
@@ -1043,20 +1110,22 @@ def settings_delete_class_type(marker: str):
     passaria a inventar uma em memória, e o dono não teria como descobrir pela
     tela por que os eventos sem marcador mudaram de comportamento.
     """
-    result: str = class_types.delete_class_type(marker)
+    tenant_id: str = current_user.tenant_id
+    result: str = class_types.delete_class_type(marker, tenant_id=tenant_id)
 
     if result == "not_found":
-        return _settings_error(f"Não encontrei a turma [{marker}].")
+        return _settings_error(f"Não encontrei a turma [{marker}].", tenant_id)
 
     if result == "is_fallback":
         return _settings_error(
             f"[{marker}] é a turma padrão e não pode ser excluída. "
             "É ela que recebe os eventos cujo título está sem marcador. "
-            "Marque outra como padrão antes de excluir esta."
+            "Marque outra como padrão antes de excluir esta.",
+            tenant_id,
         )
 
     notice: dict = {"kind": "success", "text": f"Turma [{marker}] excluída."}
-    return render_template("settings.html", **_settings_context(notice)), 200
+    return render_template("settings.html", **_settings_context(tenant_id, notice)), 200
 
 
 @dashboard_bp.route("/settings/class-events", methods=["POST"])
@@ -1073,9 +1142,10 @@ def settings_create_class_event():
     lá e não guarda nada do nosso lado. Não é uma grade (decisão 7A) — é o mesmo
     que o dono digitar no Google Agenda, só que sem sair do painel.
     """
+    tenant_id: str = current_user.tenant_id
     marker: str | None = class_types.normalize_marker(request.form.get("marker", ""))
     if marker is None:
-        return _settings_error("Escolha a turma da aula.")
+        return _settings_error("Escolha a turma da aula.", tenant_id)
 
     start, end, error = _parse_class_event_window(
         request.form.get("date", ""),
@@ -1083,30 +1153,32 @@ def settings_create_class_event():
         request.form.get("end_time", ""),
     )
     if error is not None:
-        return _settings_error(error)
+        return _settings_error(error, tenant_id)
 
-    result: dict = scheduling.create_class_event(marker, start, end)
+    result: dict = scheduling.create_class_event(marker, start, end, tenant_id=tenant_id)
 
     if result["status"] == "unknown_class_type":
-        return _settings_error(f"A turma [{marker}] não está cadastrada.")
+        return _settings_error(f"A turma [{marker}] não está cadastrada.", tenant_id)
 
     if result["status"] == "integration_not_connected":
         return _settings_error(
             "O Google Agenda não está conectado, então não dá para criar a aula. "
-            "Conecte em Configurações → Conta."
+            "Conecte em Configurações → Conta.",
+            tenant_id,
         )
 
     if result["status"] == "needs_reconnect":
         return _settings_error(
             "O Google Agenda precisa ser reconectado antes de criar aulas. "
-            "Reconecte em Configurações → Conta."
+            "Reconecte em Configurações → Conta.",
+            tenant_id,
         )
 
     notice: dict = {
         "kind": "success",
         "text": f"Aula criada na agenda: {result['label']}. A IA já pode oferecer esse horário.",
     }
-    return render_template("settings.html", **_settings_context(notice)), 200
+    return render_template("settings.html", **_settings_context(tenant_id, notice)), 200
 
 
 def _parse_class_event_window(
@@ -1158,21 +1230,25 @@ def _parse_class_event_window(
 @require_auth
 def settings_save_scheduling():
     """Salva a janela de busca de horários (days_ahead)."""
+    tenant_id: str = current_user.tenant_id
     raw: str = request.form.get("days_ahead", "").strip()
 
     try:
         days_ahead: int = int(raw)
     except ValueError:
-        return _settings_error("Informe um número inteiro de dias.")
+        return _settings_error("Informe um número inteiro de dias.", tenant_id)
 
     if not class_types.MIN_DAYS_AHEAD <= days_ahead <= class_types.MAX_DAYS_AHEAD:
         return _settings_error(
             f"Use um valor entre {class_types.MIN_DAYS_AHEAD} e "
-            f"{class_types.MAX_DAYS_AHEAD} dias."
+            f"{class_types.MAX_DAYS_AHEAD} dias.",
+            tenant_id,
         )
 
-    if not class_types.update_days_ahead(days_ahead):
-        return _settings_error("Não encontrei a configuração de agendamento desta academia para salvar.")
+    if not class_types.update_days_ahead(days_ahead, tenant_id=tenant_id):
+        return _settings_error(
+            "Não encontrei a configuração de agendamento desta academia para salvar.", tenant_id
+        )
 
     notice: dict = {"kind": "success", "text": f"A IA passa a oferecer horários dos próximos {days_ahead} dias."}
-    return render_template("settings.html", **_settings_context(notice)), 200
+    return render_template("settings.html", **_settings_context(tenant_id, notice)), 200

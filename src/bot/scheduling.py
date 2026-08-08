@@ -111,11 +111,21 @@ def _format_slot_label(start: datetime, class_type: str, labels: dict[str, str])
     return f"{weekday}, {start.strftime('%d/%m')} às {start.strftime('%H:%M')} — {class_label}"
 
 
-def _get_service_or_raise() -> tuple[Any, str]:
-    """Load owner credentials and build an authenticated Calendar service.
+def _get_service_or_raise(tenant_id: str = DEFAULT_TENANT_ID) -> tuple[Any, str]:
+    """Load ONE GYM's credentials and build an authenticated Calendar service.
 
-    Shared by get_available_slots() and book_slot() so both fail the same way
-    for the same reasons.
+    Shared by create_class_event(), get_available_slots() and book_slot() so all
+    three fail the same way for the same reasons.
+
+    THE TENANT IS THE CALENDAR (Module S3b). Every caller here already knew which
+    gym it was working for, but this function used to read the pilot's row
+    regardless — so a second gym would have been offered the PILOT's free slots
+    and would have written its bookings into the pilot's agenda. Nothing further
+    downstream could have caught it: the slots come back well-formed, just from
+    the wrong calendar.
+
+    Args:
+        tenant_id (str): The gym whose Google Calendar to open.
 
     Returns:
         tuple[Any, str]: (calendar service client, calendar_id).
@@ -126,14 +136,14 @@ def _get_service_or_raise() -> tuple[Any, str]:
         IntegrationNeedsReconnectError: Google rejected the stored
             refresh_token; store.mark_needs_reconnect() has already run.
     """
-    owner = store.get_owner_credentials()
+    owner = store.get_owner_credentials(tenant_id)
     if owner is None or owner["integration_status"] != "connected" or not owner["calendar_id"]:
         raise IntegrationNotConnectedError("Google Calendar integration is not connected.")
 
     try:
         service = get_calendar_service(owner["refresh_token"])
     except NeedsReconnectError as exc:
-        store.mark_needs_reconnect()
+        store.mark_needs_reconnect(tenant_id)
         raise IntegrationNeedsReconnectError("Owner must reconnect Google Calendar.") from exc
 
     return service, owner["calendar_id"]
@@ -181,7 +191,7 @@ def create_class_event(
         return {"status": "unknown_class_type"}
 
     try:
-        service, calendar_id = _get_service_or_raise()
+        service, calendar_id = _get_service_or_raise(tenant_id)
     except IntegrationNotConnectedError:
         return {"status": "integration_not_connected"}
     except IntegrationNeedsReconnectError:
@@ -231,7 +241,7 @@ def get_available_slots(
             Calendar, or calendar_id is missing.
         IntegrationNeedsReconnectError: Google rejected the refresh_token.
     """
-    service, calendar_id = _get_service_or_raise()
+    service, calendar_id = _get_service_or_raise(tenant_id)
 
     if days_ahead is None:
         days_ahead = class_types.get_scheduling_config(tenant_id)["days_ahead"]
@@ -266,7 +276,7 @@ def get_available_slots(
         # Direct lookup, no .get: _parse_class_type only ever returns a key of
         # this dict — including its fallback. See load_class_types().
         capacity = tenant_types["capacities"][class_type]
-        active_count = bookings.count_active_bookings(event["id"])
+        active_count = bookings.count_active_bookings(event["id"], tenant_id=tenant_id)
 
         if capacity is not None and active_count >= capacity:
             continue  # slot full
@@ -322,7 +332,7 @@ def book_slot(
         the latter case).
     """
     try:
-        service, calendar_id = _get_service_or_raise()
+        service, calendar_id = _get_service_or_raise(tenant_id)
     except IntegrationNotConnectedError:
         return {"status": "integration_not_connected"}
     except IntegrationNeedsReconnectError:
@@ -356,6 +366,7 @@ def book_slot(
         slot_end=end,
         capacity=capacity,
         child_name=child_name or None,
+        tenant_id=tenant_id,
     )
 
     if result["status"] != "created":
