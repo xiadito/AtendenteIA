@@ -365,6 +365,10 @@ class AccountsSuite:
 
             self.app = flask_app.create_app()
             self.app.config["TESTING"] = True
+            # CSRF desligado no cliente de teste (Módulo S3c). O Flask-WTF NÃO desliga
+            # sozinho por causa de TESTING — ele olha só WTF_CSRF_ENABLED — e sem isto
+            # todo POST desta suíte voltaria 400 sem chegar no código sob teste.
+            self.app.config["WTF_CSRF_ENABLED"] = False
         return self.app
 
     def provision(self, name: str, label: str, **kwargs: Any) -> dict[str, Any]:
@@ -836,8 +840,11 @@ class AccountsSuite:
         app = self.application()
         anonymous = app.test_client()
 
-        # Login e logout são as duas exceções legítimas do blueprint.
-        exempt: set[str] = {"dashboard.login", "dashboard.logout"}
+        # As exceções legítimas do blueprint — todas PÚBLICAS de propósito.
+        # dashboard.signup entrou no Módulo S3c: é um cadastro, então exigir
+        # login nele seria absurdo. Com SIGNUP_ENABLED desligada (o padrão) ele
+        # responde 404, e quem cobre o comportamento dele é tests/test_signup.
+        exempt: set[str] = {"dashboard.login", "dashboard.logout", "dashboard.signup"}
 
         checked: int = 0
         for rule in app.url_map.iter_rules():

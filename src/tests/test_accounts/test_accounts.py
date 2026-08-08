@@ -168,6 +168,10 @@ def _cmd_login(args: argparse.Namespace) -> None:
 
     app = flask_app.create_app()
     app.config["TESTING"] = True
+    # CSRF desligado no cliente de teste (Módulo S3c). O Flask-WTF NÃO desliga
+    # sozinho por causa de TESTING — ele olha só WTF_CSRF_ENABLED — e sem isto
+    # todo POST desta suíte voltaria 400 sem chegar no código sob teste.
+    app.config["WTF_CSRF_ENABLED"] = False
     client = app.test_client()
 
     response = client.post(

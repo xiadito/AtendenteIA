@@ -346,6 +346,10 @@ class InboxSuite:
 
             self.app = flask_app.create_app()
             self.app.config["TESTING"] = True
+            # CSRF desligado no cliente de teste (Módulo S3c). O Flask-WTF NÃO desliga
+            # sozinho por causa de TESTING — ele olha só WTF_CSRF_ENABLED — e sem isto
+            # todo POST desta suíte voltaria 400 sem chegar no código sob teste.
+            self.app.config["WTF_CSRF_ENABLED"] = False
         return self.app
 
     def _authenticated_client(self) -> Any:

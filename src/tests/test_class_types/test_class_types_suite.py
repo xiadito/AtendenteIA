@@ -430,6 +430,10 @@ class ClassTypesSuite:
 
             self.app = flask_app.create_app()
             self.app.config["TESTING"] = True
+            # CSRF desligado no cliente de teste (Módulo S3c). O Flask-WTF NÃO desliga
+            # sozinho por causa de TESTING — ele olha só WTF_CSRF_ENABLED — e sem isto
+            # todo POST desta suíte voltaria 400 sem chegar no código sob teste.
+            self.app.config["WTF_CSRF_ENABLED"] = False
             self.client = self.app.test_client()
             _login_suite_user(self.client)
         return self.client
@@ -1017,6 +1021,10 @@ class ClassTypesSuite:
 
         app = flask_app.create_app()
         app.config["TESTING"] = True
+        # CSRF desligado no cliente de teste (Módulo S3c). O Flask-WTF NÃO desliga
+        # sozinho por causa de TESTING — ele olha só WTF_CSRF_ENABLED — e sem isto
+        # todo POST desta suíte voltaria 400 sem chegar no código sob teste.
+        app.config["WTF_CSRF_ENABLED"] = False
         anonymous = app.test_client()
 
         paths: list[str] = [
