@@ -8,7 +8,12 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/bookings.css') }}">
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
 </head>
-<body>
+{# hx-headers no <body> manda o token CSRF em TODO hx-post desta página, inclusive
+   no conteúdo que o polling troca depois: o HTMX herda hx-headers dos ancestrais
+   do DOM, então os parciais (_conversation_messages.html, _bookings_list.html)
+   não precisam carregar token nenhum — e não devem, já que são re-renderizados a
+   cada 5s. O Flask-WTF já lê o cabeçalho X-CSRFToken por padrão. #}
+<body hx-headers='{"X-CSRFToken": "{{ csrf_token() }}"}'>
     <button class="theme-toggle" id="themeBtn" onclick="toggleTheme()">🌙 Escuro</button>
     <div class="card">
         <a class="back-link" href="{{ url_for('dashboard.menu') }}">← Menu</a>

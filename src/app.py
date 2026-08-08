@@ -33,6 +33,20 @@ def create_app():
     except Exception as e:
         print("Could not bootstrap the first dashboard user:", e)
 
+    # CSRF protection (Module S3c). CSRFProtect guards EVERY POST/PUT/PATCH/DELETE
+    # in the application, which is what the public signup form needs — and, as a
+    # side effect, finally covers the ~15 dashboard POSTs that had nothing.
+    #
+    # THE EXEMPTION BELOW IS LOAD-BEARING. webhook_bp carries POST /webhook, which
+    # Twilio calls and which obviously carries no CSRF token. Without the exempt,
+    # every inbound WhatsApp message would be answered 400, no lead would ever get
+    # a reply, and nothing in the logs would look like an error — the bot would
+    # just go quiet. Never remove it, and never move a dashboard route into
+    # webhook_bp (it would silently lose CSRF protection along the way).
+    from flask_wtf.csrf import CSRFProtect
+    csrf = CSRFProtect(app)
+    csrf.exempt(webhook_bp)
+
     # Register blueprints (modulos de rota)
     app.register_blueprint(webhook_bp)
     app.register_blueprint(dashboard_bp, url_prefix="/dashboard")

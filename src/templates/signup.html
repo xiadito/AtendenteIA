@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Corujai — Criar conta</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/theme.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/signup.css') }}">
+</head>
+{#
+  Cadastro público (Módulo S3c). Reverte a decisão do S3a, que criava contas só
+  pela linha de comando.
+
+  ⛔ A ROTA SÓ EXISTE COM SIGNUP_ENABLED=true, e o default é false. Um cadastro
+  aberto não corre o risco de criar um segundo tenant — ele FABRICA segundos
+  tenants, e até o Módulo S3b as leituras não filtram por tenant. Enquanto a
+  flag estiver desligada, /dashboard/signup responde 404.
+
+  QUATRO CAMPOS, e nada mais. Telefone do dono e número da academia moram na
+  tela de Configurações, onde já têm as guardas do S1 (normalização e recusa de
+  número que já é lead). Puxá-los para cá levaria essas validações para um
+  endpoint público sem ganho nenhum.
+
+  O IDENTIFICADOR DA ACADEMIA (tenant_id) NÃO APARECE. Ele é gerado do nome nos
+  bastidores e é imutável — mostrá-lo só geraria pedido de troca de uma chave
+  que a modelagem inteira trata como fixa.
+
+  O CAMPO "website" É UM HONEYPOT. Fica escondido pelo CSS; humano não vê, e bot
+  que preenche tudo se entrega. Ver accounts/signup.py.
+#}
+<body>
+    <button class="theme-toggle" id="themeBtn" onclick="toggleTheme()">🌙 Escuro</button>
+    <div class="card">
+        <h1>Criar a conta da sua academia</h1>
+        <p class="subtitle">Leva menos de um minuto. Você configura o resto depois.</p>
+
+        {% if error %}
+            <div class="error">{{ error }}</div>
+        {% endif %}
+
+        <form method="POST" action="{{ url_for('dashboard.signup') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+            {# Honeypot: escondido no CSS, sem label, fora da ordem de tabulação. #}
+            <div class="hp-field" aria-hidden="true">
+                <label for="website">Não preencha este campo</label>
+                <input type="text" id="website" name="website" tabindex="-1" autocomplete="off">
+            </div>
+
+            <label for="academy_name">Nome da academia</label>
+            <input
+                type="text"
+                id="academy_name"
+                name="academy_name"
+                value="{{ form.academy_name }}"
+                placeholder="Ex.: Academia Delariva Itaipuaçu"
+                autofocus
+                required
+            />
+
+            <label for="email">Seu e-mail</label>
+            <input
+                type="email"
+                id="email"
+                name="email"
+                value="{{ form.email }}"
+                placeholder="voce@suaacademia.com.br"
+                autocomplete="username"
+                required
+            />
+            <span class="field-hint">É com ele que você vai entrar no painel.</span>
+
+            <label for="password">Senha</label>
+            <input
+                type="password"
+                id="password"
+                name="password"
+                autocomplete="new-password"
+                required
+            />
+            <span class="field-hint">Pelo menos 8 caracteres.</span>
+
+            <label for="password_confirm">Confirmar senha</label>
+            <input
+                type="password"
+                id="password_confirm"
+                name="password_confirm"
+                autocomplete="new-password"
+                required
+            />
+
+            <button type="submit">Criar conta</button>
+        </form>
+
+        <p class="alt-action">
+            Já tem conta? <a href="{{ url_for('dashboard.login') }}">Entrar</a>
+        </p>
+    </div>
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+</body>
+</html>
