@@ -33,10 +33,13 @@ class Config:
 
     # Public self-service signup (Module S3c). DEFAULTS TO FALSE, and the default
     # is the whole safety story: whoever forgets to set this is closed, never
-    # open. Turning it on creates a SECOND TENANT the moment somebody signs up,
-    # and until Module S3b merges the reads do not filter by tenant — so every
-    # new gym would see the pilot's conversations and bookings.
-    # DO NOT SET THIS TO true BEFORE S3b.
+    # open. Turning it on creates a SECOND TENANT the moment somebody signs up.
+    #
+    # Module S3b made that safe — the reads filter by tenant now — so this is no
+    # longer blocked on anything technical. It stays false by default because
+    # WHEN to open signup is a business call: every new gym still needs a Twilio
+    # Sender the founder arranges by hand, and the onboarding screen tells them
+    # so. Flip it deliberately, not by inheriting someone else's .env.
     SIGNUP_ENABLED = os.environ.get("SIGNUP_ENABLED", "false").strip().lower() == "true"
 
     #google calendar

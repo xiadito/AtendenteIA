@@ -11,13 +11,11 @@ step the founder performs — an open signup would create orphan accounts with n
 number, and a founder-only screen would need a role column that nothing else in
 the project needs yet. A command has no attack surface at all.
 
-⛔ WHILE MODULE S3b IS NOT MERGED, DO NOT PROVISION A SECOND TENANT IN
-PRODUCTION — not even a test account for the founder. S3a resolves a tenant but
-the reads do not filter by one yet (`sessions` has no tenant_id, and
-get_conversation / list_conversations / list_bookings_* return every tenant's
-rows), so a second gym would see the pilot's conversations and the pilot would
-see theirs. On a development database a second tenant is exactly what the test
-suite creates.
+A SECOND TENANT IN PRODUCTION IS SAFE SINCE MODULE S3b. While S3a shipped, it
+was not: the tenant was resolved but no read filtered by it, so two gyms in one
+database saw each other's conversations and bookings. S3b made `sessions` keyed
+by (tenant_id, sender) and threaded the tenant through every read, which is what
+lifted that restriction.
 
 NO FLASK: the CLI runs with no application context.
 """
@@ -363,16 +361,19 @@ def set_whatsapp_number(tenant_id: str, raw_number: str | None) -> str:
 # CLI
 # ============================================================
 
-_RIGID_RULE_BANNER: str = """
+_WHATSAPP_PENDING_BANNER: str = """
 ╔══════════════════════════════════════════════════════════════════════════╗
-║  ⛔  ATENÇÃO — NÃO USE UMA SEGUNDA CONTA EM PRODUÇÃO AINDA                ║
+║  📱  FALTA O NÚMERO DO WHATSAPP                                          ║
 ║                                                                          ║
-║  O Módulo S3a criou contas e resolve o tenant, mas as LEITURAS ainda      ║
-║  não filtram por tenant (isso é o S3b). Com duas academias no mesmo       ║
-║  banco de produção, cada uma enxerga as conversas e os agendamentos       ║
-║  da outra. Isso vale inclusive para a sua própria conta de teste.        ║
+║  A academia está criada e o dono já consegue logar, mas ela ainda não     ║
+║  recebe mensagem nenhuma: sem `whatsapp_number`, todo webhook que chega   ║
+║  cai no tenant piloto. É a única etapa que depende de você — aprovar um   ║
+║  WhatsApp Sender no Twilio — e é a última linha do checklist que o dono   ║
+║  vê em /dashboard/onboarding.                                            ║
 ║                                                                          ║
-║  Em banco de desenvolvimento, provisionar é seguro e esperado.           ║
+║  Quando o número sair:                                                   ║
+║    python -m accounts.provision set-whatsapp-number \\                    ║
+║        --tenant-id <slug> --number 55XXXXXXXXXXX                          ║
 ╚══════════════════════════════════════════════════════════════════════════╝
 """
 
@@ -428,7 +429,7 @@ def _cmd_create(args: argparse.Namespace) -> None:
     print("  · users              — o login, com a senha em hash")
     print("\nPróximos passos: conectar o Google Calendar e preencher a seção IA")
     print("em /dashboard/settings, logando com esse e-mail.")
-    print(_RIGID_RULE_BANNER)
+    print(_WHATSAPP_PENDING_BANNER)
 
 
 def _cmd_list(args: argparse.Namespace) -> None:

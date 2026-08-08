@@ -37,6 +37,7 @@ import bot.messages as messages
 import whatsapp.whatsapp_service as whatsapp_service
 import bot.class_types as class_types
 from bot.scheduling import TIMEZONE
+from integrations.store import DEFAULT_TENANT_ID
 
 logger = logging.getLogger(__name__)
 
@@ -52,16 +53,27 @@ valid_decisions: set[str] = {
 DECIDABLE_STATUS: str = "pending_confirmation"
 
 
-def confirm_or_cancel_booking(booking_id: str, decision: str) -> dict:
+def confirm_or_cancel_booking(
+    booking_id: str,
+    decision: str,
+    tenant_id: str = DEFAULT_TENANT_ID,
+) -> dict:
     """Close a trial-class booking out, and tell the lead what happened.
+
+    The tenant travels with the decision through every step below — the lookup,
+    the status write, the class labels and the lead's notice — so that a
+    coordinator called from gym B's webhook or dashboard can only ever touch gym
+    B's booking. A booking belonging to someone else reads as "not_found", which
+    is the same answer both channels already knew how to render.
 
     Args:
         booking_id (str): trial_bookings.id the owner decided on.
         decision (str): One of valid_decisions.
+        tenant_id (str): The gym the decision was taken at.
 
     Returns:
         dict: One of
-            {"result": "not_found"} — no booking has this id;
+            {"result": "not_found"} — this gym has no booking with this id;
             {"result": "skipped", "status": str} — the booking was already
                 decided; nothing was written and the lead was not notified;
             {"result": "applied", "decision": str, "lead_notified": bool} — the
@@ -74,9 +86,9 @@ def confirm_or_cancel_booking(booking_id: str, decision: str) -> dict:
     if decision not in valid_decisions:
         raise ValueError(f"Invalid booking decision: {decision!r}")
 
-    booking = bookings.get_booking(booking_id)
+    booking = bookings.get_booking(booking_id, tenant_id=tenant_id)
     if booking is None:
-        logger.warning("Booking %s not found; nothing to decide.", booking_id)
+        logger.warning("Booking %s not found for tenant %s; nothing to decide.", booking_id, tenant_id)
         return {"result": "not_found"}
 
     # Guard 5A. Both channels land here, so neither has to remember the rule.
@@ -87,13 +99,13 @@ def confirm_or_cancel_booking(booking_id: str, decision: str) -> dict:
         )
         return {"result": "skipped", "status": booking["status"]}
 
-    bookings.update_booking_status(booking_id, decision)
+    bookings.update_booking_status(booking_id, decision, tenant_id=tenant_id)
 
-    lead_notified = _notify_lead(booking, decision)
+    lead_notified = _notify_lead(booking, decision, tenant_id)
     return {"result": "applied", "decision": decision, "lead_notified": lead_notified}
 
 
-def _notify_lead(booking: dict, decision: str) -> bool:
+def _notify_lead(booking: dict, decision: str, tenant_id: str) -> bool:
     """Send the lead the outcome of their trial class and record it.
 
     Isolated so a delivery failure can never reach the caller: the booking is
@@ -105,16 +117,18 @@ def _notify_lead(booking: dict, decision: str) -> bool:
             only the descriptive columns are read, which the update never
             touches.
         decision (str): One of valid_decisions.
+        tenant_id (str): The gym the booking belongs to. Both the class labels
+            and the conversation the notice is recorded into are per tenant.
 
     Returns:
         bool: True if the message was sent and recorded, False if it failed.
     """
     try:
-        text = _compose_lead_message(booking, decision)
+        text = _compose_lead_message(booking, decision, tenant_id)
         whatsapp_service.send_message(booking["sender"], text)
         # is_read=True: the operator's unread count is for what the LEAD says,
         # and this is the attendant talking (see bot/messages.py).
-        messages.add_message(booking["sender"], "ai", text, is_read=True)
+        messages.add_message(booking["sender"], "ai", text, is_read=True, tenant_id=tenant_id)
     except Exception:
         # Never log the text itself (public repo): the booking id is enough to
         # find the row and retry by hand.
@@ -125,18 +139,21 @@ def _notify_lead(booking: dict, decision: str) -> bool:
     return True
 
 
-def _compose_lead_message(booking: dict, decision: str) -> str:
+def _compose_lead_message(booking: dict, decision: str, tenant_id: str) -> str:
     """Build the Portuguese WhatsApp text telling the lead the outcome.
 
     Args:
         booking (dict): The booking row.
         decision (str): One of valid_decisions.
+        tenant_id (str): The gym whose class labels name the class. Reading the
+            pilot's labels here would print another gym's wording — or the raw
+            marker — into a message a real lead receives.
 
     Returns:
         str: The message to send to the lead.
     """
     # One read per decision — this is a single booking, not a loop.
-    class_labels: dict[str, str] = class_types.load_class_types()["labels"]
+    class_labels: dict[str, str] = class_types.load_class_types(tenant_id)["labels"]
     class_label = class_labels.get(booking["class_type"], booking["class_type"])
     when = booking["slot_start"].astimezone(TIMEZONE).strftime("%d/%m às %H:%M")
     lead_name = booking["lead_name"]

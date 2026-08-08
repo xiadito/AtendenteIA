@@ -68,21 +68,18 @@ def handle_text_message(
 ) -> None:
     """Entry point for an incoming WhatsApp text message.
 
-    MODULE S3b SEAM — READ THIS BEFORE FILLING IN THE ARGUMENT.
+    `tenant_id` arrives already resolved from Twilio's "To" field
+    (webhook/routes.py::receive_twilio) and, since Module S3b, travels through
+    EVERY read and write below: get_session(), save_session(), add_message(),
+    get_recent_messages(), get_ai_config(), get_cached_slots(),
+    list_active_bookings_by_sender(), book_slot(), get_owner_for_notification()
+    and enqueue_notification(). Nothing in this path reads flask.g or
+    current_user — the tenant is an argument, always (decision 14A).
 
-    `tenant_id` arrives here already resolved from Twilio's "To" field
-    (webhook/routes.py::receive_twilio), and deliberately GOES NO FURTHER. Every
-    read below still runs on its callee's default: get_ai_config(),
-    get_cached_slots(), add_message(), list_active_bookings_by_sender(),
-    get_session(), save_session(), get_owner_for_notification(). Each of those
-    call sites is marked with an `# S3b:` comment.
-
-    Threading it through them is Module S3b's entire job, and doing it here
-    would be a half-isolation that reads as finished: `sessions` has no
-    tenant_id column, `messages`' foreign key is not composite, and
-    `trial_bookings`' UNIQUE is not tenant-scoped. **Until S3b merges, no second
-    account may exist in production** — with 'default' as the only tenant this
-    seam is inert and correct.
+    That closes the seam Module S3a left open. `sessions` is now keyed by
+    (tenant_id, sender), `messages` has a composite foreign key onto it, and
+    `trial_bookings`' UNIQUE includes the tenant, so a second gym is genuinely
+    isolated rather than reading the pilot's rows.
 
     Args:
         sender (str): The lead's number, e.g. "5521999999999".
@@ -98,8 +95,7 @@ def handle_text_message(
         "Handling text message from %s (%d chars) for tenant %s.", sender, len(text), tenant_id
     )
 
-    # S3b: pass tenant_id here.
-    state: dict = session.get_session(sender)
+    state: dict = session.get_session(sender, tenant_id=tenant_id)
 
     # 1. Pause check FIRST. A handoff-paused lead is not answered, and this must
     #    come before any token cost and before the timeout (so the pause never
@@ -107,8 +103,7 @@ def handle_text_message(
     #    holding this conversation in the inbox, and everything the lead says
     #    while the bot is silent is exactly what that operator needs to read.
     if state.get("is_paused"):
-        # S3b: pass tenant_id here.
-        messages.add_message(sender, "lead", text)
+        messages.add_message(sender, "lead", text, tenant_id=tenant_id)
         logger.info("Session for %s is paused (handoff); message stored, AI not called.", sender)
         return
 
@@ -122,12 +117,12 @@ def handle_text_message(
     #    The resume note rides along on the single turn after the operator hands
     #    the conversation back, and the marker is cleared right here so it is
     #    delivered exactly once (persisted with the rest of the state in step 7).
-    # S3b: pass tenant_id to all three. get_cached_slots() is the delicate one —
-    # its ~60s cache is keyed by (tenant_id, days_ahead) and seven stubs in
-    # tests/test_ai_action replace it with a no-argument lambda.
-    config = ai_configs.get_ai_config()
-    slots = get_cached_slots()
-    active_bookings = bookings.list_active_bookings_by_sender(sender)
+    #    get_cached_slots() is the delicate one: its ~60s cache is keyed by
+    #    (tenant_id, days_ahead), so passing the tenant is what keeps gym A from
+    #    being offered the times cached for gym B.
+    config = ai_configs.get_ai_config(tenant_id)
+    slots = get_cached_slots(tenant_id=tenant_id)
+    active_bookings = bookings.list_active_bookings_by_sender(sender, tenant_id=tenant_id)
     resume_note: bool = bool(state.get("needs_resume_note"))
     system_prompt = build_system_prompt(config, slots, active_bookings, resume_note=resume_note)
     state["needs_resume_note"] = False
@@ -135,12 +130,12 @@ def handle_text_message(
     # 4. Record the lead's message, then replay the recent window to the AI.
     #    The window is bounded by conversation_started_at, so a conversation the
     #    timeout restarted does not get the previous one replayed into it.
-    # S3b: pass tenant_id here.
-    messages.add_message(sender, "lead", text)
+    messages.add_message(sender, "lead", text, tenant_id=tenant_id)
     recent = messages.get_recent_messages(
         sender,
         MAX_PAYLOAD_MESSAGES,
         since=state.get("conversation_started_at"),
+        tenant_id=tenant_id,
     )
 
     try:
@@ -165,7 +160,9 @@ def handle_text_message(
     if action_data is not None:
         _apply_lenient_state(state, action_data)
         try:
-            outgoing, notification_event = _execute_action(state, action_data, slots, sender, ai_message)
+            outgoing, notification_event = _execute_action(
+                state, action_data, slots, sender, ai_message, tenant_id
+            )
         except Exception:
             # Errors here (e.g. a Calendar network blip inside book_slot's event
             # fetch) happen before anything is written, so no booking stands.
@@ -184,9 +181,8 @@ def handle_text_message(
     #    the operator will read in the inbox, and it keeps the action block out
     #    of the next turn's token budget. Born read — an outgoing message is
     #    nothing for the operator to catch up on.
-    # S3b: pass tenant_id to both.
-    session.save_session(sender, state)
-    messages.add_message(sender, "ai", outgoing, is_read=True)
+    session.save_session(sender, state, tenant_id=tenant_id)
+    messages.add_message(sender, "ai", outgoing, is_read=True, tenant_id=tenant_id)
 
     # 7b. Enqueue an owner notification, if this turn closed a booking or
     #     triggered a handoff. Isolated on purpose: this runs after the
@@ -194,8 +190,7 @@ def handle_text_message(
     #     A failure here must never stop the reply from reaching the lead.
     if notification_event is not None:
         try:
-            # S3b: pass tenant_id here.
-            owner = store.get_owner_for_notification()
+            owner = store.get_owner_for_notification(tenant_id)
             if owner is None or not owner.get("owner_phone"):
                 logger.warning("Owner has no owner_phone configured; skipping notification for %s.", sender)
             else:
@@ -205,6 +200,7 @@ def handle_text_message(
                     event_type=notification_event["event_type"],
                     lead_sender=sender,
                     booking_id=notification_event.get("booking_id"),
+                    tenant_id=tenant_id,
                 )
         except Exception:
             logger.exception("Failed to enqueue owner notification for %s; message will still be sent.", sender)
@@ -375,7 +371,8 @@ def _coerce_stage(data: dict, current: str) -> str:
 
 
 def _execute_action(
-    state: dict, data: dict, slots: list[dict], sender: str, ai_message: str
+    state: dict, data: dict, slots: list[dict], sender: str, ai_message: str,
+    tenant_id: str = store.DEFAULT_TENANT_ID,
 ) -> tuple[str, dict | None]:
     """Execute the strict action and set the final stage. Returns the outgoing text.
 
@@ -385,6 +382,8 @@ def _execute_action(
         slots (list[dict]): The slots injected this turn (for event_id validation).
         sender (str): The lead's number.
         ai_message (str): The AI's lead-facing text (block already stripped).
+        tenant_id (str): The gym this conversation belongs to, carried down to
+            book_slot() so the reservation lands in the right ledger.
 
     Returns:
         tuple[str, dict | None]: The message to send — the AI's text, or a
@@ -405,7 +404,7 @@ def _execute_action(
         return ai_message, {"event_type": "handoff"}
 
     if action == "book":
-        return _execute_booking(state, data, slots, sender, ai_message)
+        return _execute_booking(state, data, slots, sender, ai_message, tenant_id)
 
     # action == "none": pure registry update.
     state["stage"] = _coerce_stage(data, state.get("stage", "greeting"))
@@ -413,7 +412,8 @@ def _execute_action(
 
 
 def _execute_booking(
-    state: dict, data: dict, slots: list[dict], sender: str, ai_message: str
+    state: dict, data: dict, slots: list[dict], sender: str, ai_message: str,
+    tenant_id: str = store.DEFAULT_TENANT_ID,
 ) -> tuple[str, dict | None]:
     """Validate and perform a booking, returning the message to send.
 
@@ -427,6 +427,7 @@ def _execute_booking(
         slots (list[dict]): The slots injected this turn.
         sender (str): The lead's number.
         ai_message (str): The AI's lead-facing text.
+        tenant_id (str): The gym whose class types and ledger apply.
 
     Returns:
         tuple[str, dict | None]: The message to send, and a notification_event
@@ -447,7 +448,7 @@ def _execute_booking(
         return "Antes de eu confirmar, como você se chama? 🙂", None
 
     lead = {"sender": sender, "name": lead_name, "child_name": state.get("child_name")}
-    result = scheduling.book_slot(event_id, lead)
+    result = scheduling.book_slot(event_id, lead, tenant_id=tenant_id)
     status = result.get("status")
 
     if status == "created":

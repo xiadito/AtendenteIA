@@ -631,7 +631,7 @@ class ClassTypesSuite:
             _event("ev-open", "[OPEN] Livre"),
         ])
 
-        with patched(scheduling, "_get_service_or_raise", lambda: (calendar, "cal")):
+        with patched(scheduling, "_get_service_or_raise", lambda tenant_id=None: (calendar, "cal")):
             slots = scheduling.get_available_slots(days_ahead=14, tenant_id=SUITE_TENANT)
 
         by_id = {slot["event_id"]: slot for slot in slots}
@@ -658,7 +658,7 @@ class ClassTypesSuite:
         calendar = FakeCalendar([_event("ev-sem-marcador", "Aula livre sem marcador")])
 
         with WarningCapture() as capture:
-            with patched(scheduling, "_get_service_or_raise", lambda: (calendar, "cal")):
+            with patched(scheduling, "_get_service_or_raise", lambda tenant_id=None: (calendar, "cal")):
                 # Must not raise. Before Module S2 this was CLASS_CAPACITY[...]
                 # against a literal that always had the key; from a table it is
                 # only safe because load_class_types() guarantees the fallback.
@@ -685,7 +685,7 @@ class ClassTypesSuite:
             _event("ev-espacos", "[ CRIANCAS ] Aula Experimental"),
         ])
 
-        with patched(scheduling, "_get_service_or_raise", lambda: (calendar, "cal")):
+        with patched(scheduling, "_get_service_or_raise", lambda tenant_id=None: (calendar, "cal")):
             slots = scheduling.get_available_slots(days_ahead=14)
 
         by_id = {slot["event_id"]: slot for slot in slots}
@@ -703,11 +703,11 @@ class ClassTypesSuite:
         seed_tenant(f"{TENANT_PREFIX}cheio", [("UNICA", "Única", 1, False, True)])
         calendar = FakeCalendar([_event("ev-cheio", "[UNICA] Turma")])
 
-        def one_booking(event_id: str) -> int:
+        def one_booking(event_id: str, tenant_id: str | None = None) -> int:
             return 1
 
         with patched(scheduling.bookings, "count_active_bookings", one_booking):
-            with patched(scheduling, "_get_service_or_raise", lambda: (calendar, "cal")):
+            with patched(scheduling, "_get_service_or_raise", lambda tenant_id=None: (calendar, "cal")):
                 slots = scheduling.get_available_slots(
                     days_ahead=14, tenant_id=f"{TENANT_PREFIX}cheio")
 
@@ -733,7 +733,7 @@ class ClassTypesSuite:
         """Step 13: days_ahead=None actually reaches the Calendar query."""
         calendar = FakeCalendar([])
 
-        with patched(scheduling, "_get_service_or_raise", lambda: (calendar, "cal")):
+        with patched(scheduling, "_get_service_or_raise", lambda tenant_id=None: (calendar, "cal")):
             scheduling.get_available_slots(tenant_id=SUITE_TENANT)
 
         time_min = datetime.fromisoformat(calendar.last_list_kwargs["timeMin"])
@@ -744,7 +744,7 @@ class ClassTypesSuite:
 
         # An explicit argument still wins, without touching the database — which
         # is what keeps the Module 2 suite's days_ahead=0/14 calls meaningful.
-        with patched(scheduling, "_get_service_or_raise", lambda: (calendar, "cal")):
+        with patched(scheduling, "_get_service_or_raise", lambda tenant_id=None: (calendar, "cal")):
             scheduling.get_available_slots(days_ahead=3, tenant_id=SUITE_TENANT)
 
         time_min = datetime.fromisoformat(calendar.last_list_kwargs["timeMin"])
@@ -771,9 +771,15 @@ class ClassTypesSuite:
             "child_name": "Bento",
             "slot_start": datetime.now(scheduling.TIMEZONE) + timedelta(days=1),
         }
-        notification = {"event_type": "booking", "booking_id": "booking-fake", "lead_sender": "5527000000001"}
+        # tenant_id rides on the row since Module S3b: the cron resolves labels
+        # and the booking from the notification's own tenant, never a default.
+        notification = {
+            "event_type": "booking", "booking_id": "booking-fake",
+            "lead_sender": "5527000000001", "tenant_id": class_types.DEFAULT_TENANT_ID,
+        }
 
-        with patched(drain.bookings, "get_booking", lambda booking_id: booking):
+        with patched(drain.bookings, "get_booking",
+                     lambda booking_id, tenant_id=None: booking):
             text = drain._compose_message(notification, labels)
             # An unknown marker (a class type deleted after the booking) degrades
             # to the raw marker instead of raising.
@@ -937,7 +943,7 @@ class ClassTypesSuite:
         start = datetime.now(scheduling.TIMEZONE) + timedelta(days=2)
         end = start + timedelta(hours=1)
 
-        with patched(scheduling, "_get_service_or_raise", lambda: (calendar, "cal")):
+        with patched(scheduling, "_get_service_or_raise", lambda tenant_id=None: (calendar, "cal")):
             result = scheduling.create_class_event("KIDS", start, end, SUITE_TENANT)
 
         expect_equal(result["status"], "created", "status da criação")
@@ -952,7 +958,7 @@ class ClassTypesSuite:
         # The event must round-trip: what was written is what the engine reads.
         written = _event("ev-novo", body["summary"])
         reader = FakeCalendar([written])
-        with patched(scheduling, "_get_service_or_raise", lambda: (reader, "cal")):
+        with patched(scheduling, "_get_service_or_raise", lambda tenant_id=None: (reader, "cal")):
             slots = scheduling.get_available_slots(days_ahead=14, tenant_id=SUITE_TENANT)
 
         expect_equal(slots[0]["class_type"], "KIDS", "turma lida de volta do título criado")
@@ -960,7 +966,7 @@ class ClassTypesSuite:
         expect_equal(slots[0]["remaining_slots"], 6, "vagas lidas de volta")
 
         # An unregistered marker never reaches the Calendar.
-        with patched(scheduling, "_get_service_or_raise", lambda: (calendar, "cal")):
+        with patched(scheduling, "_get_service_or_raise", lambda tenant_id=None: (calendar, "cal")):
             refused = scheduling.create_class_event("NAOEXISTE", start, end, SUITE_TENANT)
         expect_equal(refused["status"], "unknown_class_type", "turma não cadastrada")
         expect_equal(len(calendar.inserted_bodies), 1, "nada foi criado para turma inexistente")
@@ -992,7 +998,7 @@ class ClassTypesSuite:
              "turma não cadastrada"),
         ]
 
-        with patched(scheduling, "_get_service_or_raise", lambda: (calendar, "cal")):
+        with patched(scheduling, "_get_service_or_raise", lambda tenant_id=None: (calendar, "cal")):
             for data, what in cases:
                 response = client.post("/dashboard/settings/class-events", data=data)
                 expect_equal(response.status_code, 200, f"{what}: status")
