@@ -321,12 +321,12 @@ def signup():
     fallback `class_types` row, `scheduling_configs` and `users` in ONE
     transaction. Nothing about what a tenant needs lives here.
 
-    BEHIND A FLAG THAT DEFAULTS TO OFF. A public signup does not merely risk a
-    second tenant — it MANUFACTURES them. That was disqualifying while the reads
-    ran unfiltered; Module S3b closed that, so the flag is now a business switch
-    rather than a safety interlock: a gym that signs up still cannot receive a
-    message until the founder approves its Twilio Sender by hand, which is the
-    last, buttonless line of /dashboard/onboarding.
+    BEHIND A FLAG THAT NOW DEFAULTS TO ON. A public signup does not merely risk a
+    second tenant — it MANUFACTURES them, which was disqualifying while the reads
+    ran unfiltered. Module S3b closed that, and the flag was flipped: it was an
+    interlock, not a feature toggle, and it had nothing left to protect. A gym
+    that signs up still cannot receive a message until its Twilio Sender is
+    approved by hand — the last, buttonless line of /dashboard/onboarding.
 
     404, NOT 403, WHEN DISABLED, and before anything else runs: 403 advertises
     that there is something here to come back for.

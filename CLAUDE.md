@@ -10,10 +10,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > `messages` has a composite foreign key onto it, `trial_bookings`' `UNIQUE` includes the tenant,
 > and every core read takes a `tenant_id` and filters by it.
 >
-> **`SIGNUP_ENABLED` still defaults to `false`, and that is now a business switch, not a safety
-> interlock.** Opening signup is the founder's call, because every new gym depends on a WhatsApp
-> Sender approved by hand on Twilio — which is exactly what the last, buttonless line of
-> `/dashboard/onboarding` says.
+> **`SIGNUP_ENABLED` now defaults to `true`** — the founder opened the door once the isolation was
+> in place. The flag was never a feature toggle; it was a safety interlock, and S3b left it with
+> nothing to protect. **It still does not make a signup into a working gym:** a new tenant receives
+> no WhatsApp message until its Twilio Sender is approved by hand and `whatsapp_number` is set,
+> which is the last, buttonless line of `/dashboard/onboarding`. An environment that wants the
+> door shut must now say `SIGNUP_ENABLED="false"` explicitly.
 >
 > **What is still shared across tenants, deliberately:** the `owner_notifications` queue (drained
 > globally by the cron, resolved per row), `signup_attempts` (a system-wide throttle), and
@@ -1131,12 +1133,13 @@ receive a single message. What changed is the answer — instead of closing the 
 and lands the new owner on a checklist that says what is still missing, including the part only
 the founder can do.
 
-**Everything is behind `SIGNUP_ENABLED`, which defaults to `false`.** With the flag off the route
-`abort(404)`s on the first line — 404 rather than 403, because 403 advertises that there is
-something to come back for — and `login.html` does not render the link. When S3c shipped, that was
-a hard safety interlock: a public signup *manufactures* second tenants and the reads did not yet
-filter by one. Module S3b removed that reason. The flag stays off by default because a gym that
-signs up still cannot receive a message until the founder approves its Twilio Sender.
+**Everything is behind `SIGNUP_ENABLED`, which defaults to `true` since Module S3b.** With the flag
+off the route `abort(404)`s on the first line — 404 rather than 403, because 403 advertises that
+there is something to come back for — and `login.html` does not render the link. When S3c shipped
+the flag defaulted to `false` and that was a hard safety interlock: a public signup *manufactures*
+second tenants and the reads did not yet filter by one. S3b removed the reason, and the founder
+flipped it. The route and its two guards (honeypot, per-IP ceiling) are unchanged — what changed is
+only which way the switch points when nobody sets it.
 
 **The route has no business logic.** It validates the form and calls
 `accounts/provision.py::provision_tenant()`, which S3a already wrote: five tables in one
@@ -1287,7 +1290,7 @@ Defined in `src/.env` and loaded via `config.py`:
 | `GOOGLE_REDIRECT_URI` | Must match the redirect URI registered in Google Cloud Console exactly |
 | `FLASK_ENV` | Defaults to `development`; not currently gating anything since `seed.py` was removed |
 | `DASHBOARD_USER` | The founder's **email**. Used once, with `DASHBOARD_PASSWORD`, to bootstrap the first dashboard user. A value without `@` is refused with a printed warning (it was `admin` before S3a, when this variable was read and used by nothing) |
-| `SIGNUP_ENABLED` | Turns the public signup screen on. Defaults to `false`. Since Module S3b that default is a **business** choice, not a safety interlock — a new gym cannot receive a message until the founder approves its Twilio Sender by hand. While off, `/dashboard/signup` answers 404 |
+| `SIGNUP_ENABLED` | Turns the public signup screen on. **Defaults to `true` since Module S3b** — the interlock it used to be had nothing left to protect once the reads filtered by tenant. Set it to `"false"` explicitly to close the door in a given environment; while off, `/dashboard/signup` answers 404 |
 | `WHATSAPP_TOKEN` | Meta Cloud API token (currently unused) |
 | `WHATSAPP_PHONE_NUMBER_ID` | Meta Cloud API phone ID (currently unused) |
 
@@ -1362,10 +1365,10 @@ Defined in `src/.env` and loaded via `config.py`:
   `accounts/signup.py`, `accounts/onboarding.py`, migration 010) plus **CSRF across the whole
   application** (Flask-WTF, with `webhook_bp` exempt). A gym owner creates their own account,
   which calls the same `provision_tenant()` the CLI uses, and lands on a derived onboarding
-  checklist. Guarded by a honeypot and a per-IP ceiling counted in Postgres. **Behind
-  `SIGNUP_ENABLED`, which defaults to false** — a hard interlock when it shipped, since a public
-  signup manufactures the very second tenant the reads could not isolate; a business decision
-  since Module S3b closed that. See `src/tests/test_signup/SIGNUP_TESTING.md`.
+  checklist. Guarded by a honeypot and a per-IP ceiling counted in Postgres. Behind
+  `SIGNUP_ENABLED`, which **shipped defaulting to false** — a hard interlock, since a public signup
+  manufactures the very second tenant the reads could not isolate — and **defaults to true since
+  Module S3b**, which removed the reason. See `src/tests/test_signup/SIGNUP_TESTING.md`.
 - **Future (SaaS phase)** — beyond S3b: a funnel/metrics screen (S4) and billing (S5). Also
   pending: reminders before the class, and multi-operator identity (`users` already accepts two
   rows per tenant, but `messages.author = 'operator'` still cannot say which human replied).
