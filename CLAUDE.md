@@ -14,6 +14,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > **Not even the founder's own test account.** With `'default'` as the only tenant, S3a in
 > production is safe and behaves exactly as it did before.
 >
+> **And do not set `SIGNUP_ENABLED=true` before S3b either.** Module S3c added a public signup
+> screen; a public signup does not merely risk a second tenant, it *manufactures* them. The flag
+> defaults to `false` and the route answers 404 while it is off — leave it that way until the
+> reads filter by tenant.
+>
 > On a development database, `python -m accounts.provision` is safe — a second tenant is exactly
 > what `tests/test_accounts` creates.
 
@@ -96,20 +101,23 @@ python tests/test_class_types/test_class_types_suite.py
 
 # Module S3a — accounts, login and tenant provisioning (no network at all)
 python tests/test_accounts/test_accounts_suite.py
+
+# Module S3c — public signup + CSRF (no network at all; the only suite that runs CSRF ON)
+python tests/test_signup/test_signup_suite.py
 ```
 
 Each suite prints a PASS/FAIL report and exits non-zero on failure; SKIPs don't fail the run.
 Each module also has a manual CLI (`test_scheduling.py`, `test_ai_action.py`,
 `test_owner_notifications.py`, `test_inbox.py`, `test_confirmation.py`, `test_settings.py`,
-`test_class_types.py`, `test_accounts.py`) and a testing roteiro (`SCHEDULING_ENGINE_TESTING.md`,
-`AI_ACTION_TESTING.md`, `OWNER_NOTIFICATIONS_TESTING.md`, `INBOX_TESTING.md`,
-`CONFIRMATION_TESTING.md`, `SETTINGS_TESTING.md`, `CLASS_TYPES_TESTING.md`,
-`ACCOUNTS_TESTING.md`).
+`test_class_types.py`, `test_accounts.py`, `test_signup.py`) and a testing roteiro
+(`SCHEDULING_ENGINE_TESTING.md`, `AI_ACTION_TESTING.md`, `OWNER_NOTIFICATIONS_TESTING.md`,
+`INBOX_TESTING.md`, `CONFIRMATION_TESTING.md`, `SETTINGS_TESTING.md`, `CLASS_TYPES_TESTING.md`,
+`ACCOUNTS_TESTING.md`, `SIGNUP_TESTING.md`).
 
 Each suite owns a sender prefix so their teardowns can never collide: `5521000...` (scheduling),
 `5522000...` (AI action), `5523000...` (owner notifications), `5524000...` (inbox),
 `5525000...` (confirmation), `5526000...` (settings), `5527000...` (class types),
-`5528000...` (accounts).
+`5528000...` (accounts), `5529000...` (signup).
 
 **Since Module S3a every suite that drives the dashboard creates its own `users` row and logs in
 through the real `POST /dashboard/login`.** Stuffing `session["dashboard_authenticated"] = True`
@@ -119,7 +127,12 @@ can never delete each other's row, and each deletes only its own. Forging Flask-
 session keys (`_user_id`, `_fresh`) was rejected: they are undocumented, and they would still
 need a real `users` row for the `user_loader` to resolve.
 
-**`test_accounts` is the first suite with NO `/tmp` backup, deliberately.** It never writes to the
+**Since Module S3c, six test files also carry `app.config["WTF_CSRF_ENABLED"] = False`** beside
+their `TESTING` line. Flask-WTF does not disable CSRF for `TESTING`; without that line every POST
+through a test client returns 400 without reaching the code under test. `test_signup` is the
+exception that proves the wiring: it is the only suite that runs anything with CSRF **on**.
+
+**`test_accounts` and `test_signup` are the suites with NO `/tmp` backup, deliberately.** It never writes to the
 pilot: every scenario runs on fixture tenants that `provision_tenant()` builds under the prefix
 `suite-s3a-`. `_drop_orphan_fixtures()`, called at the start of `main()`, plays the crash-repair
 role the backup file plays elsewhere. Don't "restore" the missing backup step — there is nothing
@@ -262,7 +275,9 @@ appear in a row.
 google-api-python-client, google-auth-oauthlib, google-auth) plus their transitive closure.
 **Flask-Login (Module S3a) drags in nothing** beyond Flask and Werkzeug, both already pinned —
 and password hashing uses `werkzeug.security` (scrypt) rather than adding passlib, for the same
-reason: Werkzeug is already there.
+reason: Werkzeug is already there. **Flask-WTF (Module S3c)** drags in `WTForms`, and only that;
+it is used for `CSRFProtect` alone — no `FlaskForm`, no form classes, since every form in this
+project is hand-written HTML.
 Do **not** regenerate it with a bare `pip freeze > requirements.txt` — that pulls back in
 every experiment left in the venv. When adding a dependency, append the pin plus whatever
 it drags in.
@@ -479,7 +494,7 @@ with **no DB `CHECK`**, so widening an enum is a code change with no migration (
 `database/migrations/` in filename order, recording each version so it never re-runs.
 There is no ORM — SQLAlchemy/Alembic are deliberately *not* dependencies.
 
-The sequence is **contiguous, 001–009**. Each table is created complete by a single migration,
+The sequence is **contiguous, 001–010**. Each table is created complete by a single migration,
 with one deliberate exception: **migration 009 alters `owners` twice** (Module S3a), because
 `whatsapp_number` did not exist as a concept until the one-number-per-gym decision and 003 was
 already applied everywhere. Everything else still holds the property.
@@ -495,6 +510,7 @@ already applied everywhere. Everything else still holds the property.
 | `007_create_messages.sql` | `messages` (the conversation, FK to `sessions` `ON DELETE CASCADE`) + `(sender, created_at)` and a partial index for the unread count |
 | `008_create_class_types.sql` | `class_types` (per-tenant class types, PK `(tenant_id, marker)`) + a partial unique index for one fallback per tenant, **and** `scheduling_configs` (`days_ahead`); seeds both for the `default` tenant |
 | `009_create_users.sql` | `users` (dashboard accounts, `email` UNIQUE, FK `tenant_id → owners` `ON DELETE CASCADE`) + `idx_users_tenant_id`; **alters** `owners` to add `whatsapp_number`, plus unique indexes on `whatsapp_number` and on `owner_phone` (the one S1 deferred). **No seed** — a password hash must not live in a public repo, so the first user is created at runtime by `accounts/bootstrap.py` |
+| `010_create_signup_attempts.sql` | `signup_attempts` (the public-signup throttle: one row per attempt, `ip_hash` never the raw IP) + `(ip_hash, created_at)` in that order — every query is equality-then-window |
 
 **The "never edit an applied migration" rule was suspended while the project was pre-deploy —
 and Module 5 was the last time.** With no database created anywhere, there was no applied
@@ -589,7 +605,9 @@ A login-protected web dashboard is available at `/dashboard/menu`. Routes are de
 | Route | Method | Description |
 |---|---|---|
 | `/dashboard/login` | GET/POST | Email + password login, validated against `users` |
+| `/dashboard/signup` | GET/POST | Public signup — **404 unless `SIGNUP_ENABLED`** (Module S3c) |
 | `/dashboard/logout` | GET | Ends the login session, redirects to login |
+| `/dashboard/onboarding` | GET | What a new gym still has to configure; checklist derived, no state |
 | `/dashboard/menu` | GET | Post-login navigation hub (inbox, integrations, future features) |
 | `/dashboard/inbox` | GET | Conversation list — paused and unread first |
 | `/dashboard/inbox/conversations` | GET | Partial of the list, HTMX polling target |
@@ -626,8 +644,10 @@ page. Login redirects to the menu too, so the menu is the single entry point to 
 one configuration screen**, settings (Module S1), which is the first place in the project
 where configuration is written from the UI instead of by hand-run SQL.
 
-**There is no account screen, and there will not be one soon.** Creating a gym is a command
-(`python -m accounts.provision`), and so is resetting a password. See Accounts below for why.
+**Since Module S3c a gym owner can create their own account** at `/dashboard/signup`, and lands
+on `/dashboard/onboarding`. The founder's CLI (`python -m accounts.provision`) did not go away —
+it is still how you provision on somebody's behalf, and still the only way to reset a password.
+There is no password-reset screen: the project has no email channel at all.
 
 **Trap:** the bookings page endpoint is `dashboard.bookings_review`, not `dashboard.bookings`.
 `routes.py` does `import bot.bookings as bookings` at the top, and a view function named
@@ -990,6 +1010,86 @@ CLIs and the suites) working with two positional arguments — but note that a *
 saved by it, since the caller is what passes the third argument. That is what broke
 `test_owner_notifications`' fakes.
 
+### Public Signup (Module S3c)
+
+The screen that lets a gym owner create their own account, reversing Module S3a's closed-signup
+decision. S3a's reasoning still stands as context and is worth keeping: a gym only works once it
+has a Twilio Sender the founder arranges by hand, so an open form can create accounts that cannot
+receive a single message. What changed is the answer — instead of closing the door, S3c opens it
+and lands the new owner on a checklist that says what is still missing, including the part only
+the founder can do.
+
+**Everything is behind `SIGNUP_ENABLED`, which defaults to `false`.** With the flag off the route
+`abort(404)`s on the first line — 404 rather than 403, because 403 advertises that there is
+something to come back for — and `login.html` does not render the link. This is not caution about
+a hypothetical: a public signup *manufactures* second tenants, and until S3b the reads do not
+filter by one.
+
+**The route has no business logic.** It validates the form and calls
+`accounts/provision.py::provision_tenant()`, which S3a already wrote: five tables in one
+transaction. Password-versus-confirmation is the only check that belongs to the screen;
+`users.normalize_email()` and `users.validate_password()` already existed and run inside
+`provision_tenant()` before it touches the database. A `ValueError` from there is rendered as the
+form's error message — never a 500.
+
+**The slug is never read from the form.** `provision_tenant()` accepts `tenant_id` because the
+founder's CLI uses it; reading it from a public POST would let a stranger pick a primary key and
+race other gyms for good names.
+
+**"Email already registered" is deliberately vague.** `/login` was built generic on purpose so it
+could not be used to enumerate accounts; a signup form that cheerfully confirms an address hands
+that oracle straight back. The message is *"Não foi possível criar a conta com esses dados."*
+
+**Two guards, both cheap, neither pretending to be more.** A **honeypot** (`accounts/signup.py`,
+field `website`, hidden with `position:absolute;left:-9999px` — NOT `display:none`, which is the
+first thing a spam script filters out) answers a filled field with the same success page a human
+gets and writes nothing; responding with an error would teach the next bot to skip the field. And
+a **per-IP ceiling** counted in `signup_attempts`, in the DATABASE — gunicorn runs several
+workers, and an in-process counter would see roughly 1/N of the attempts and let N times the rate
+through. The IP is stored as a salted SHA-256: the throttle only ever asks "seen this client
+before?", equality answers that, and a raw IP is personal data in a public schema.
+
+**`_client_ip()` reads `X-Forwarded-For` first.** Behind Railway's proxy `request.remote_addr` is
+the *proxy*, so every signup on earth would share one bucket and the form would lock for everyone
+after five attempts. The header is client-controlled and spoofable, which is acceptable for a
+throttle and would not be for anything granting access.
+
+**The onboarding screen has no state of its own** (`accounts/onboarding.py`,
+`/dashboard/onboarding`). Every step is derived — `integration_status`, whether `ai_configs` still
+holds the bracketed guide texts, whether the tenant has more than the one seeded class type,
+whether `whatsapp_number` is set. There is deliberately no `onboarding_completed` column: a
+checklist with its own state is a second record of a fact the tables already hold, and the two
+drift. The last step has no button and says "aguardando", because it needs a Twilio Sender the
+owner cannot arrange — saying so is the point of the page, since otherwise they configure
+everything correctly and are left wondering why the bot is silent.
+
+Testing roteiro: `src/tests/test_signup/SIGNUP_TESTING.md`.
+
+### CSRF Protection (Module S3c)
+
+`CSRFProtect(app)` in `create_app()` guards **every** POST/PUT/PATCH/DELETE in the application.
+The public signup form is what forced the issue, but the same line retroactively covers the ~15
+dashboard POSTs that had nothing.
+
+> **`csrf.exempt(webhook_bp)` IS LOAD-BEARING.** `webhook_bp` carries `POST /webhook`, which
+> Twilio calls with no token. Without the exemption every inbound WhatsApp message is answered
+> 400, no lead is ever replied to, and **nothing in the logs looks like an error** — the bot just
+> goes quiet. It is the one failure in this module that kills the product silently. Never remove
+> it, and never move a dashboard route into `webhook_bp`, which would silently drop that route's
+> protection too. `tests/test_signup` scenario 14 exists solely to pin this.
+
+**Twelve forms carry `{{ csrf_token() }}`**; the three `hx-post` calls are covered by one
+`hx-headers='{"X-CSRFToken": "…"}'` on the `<body>` of `conversation.html` and `bookings.html`.
+HTMX inherits `hx-headers` from DOM ancestors, so content swapped in by the 5s polling inherits
+from the parent page — which is why the partials (`_bookings_list.html`,
+`_conversation_messages.html`) carry no token and must not: they are re-rendered constantly.
+
+**Trap:** Flask-WTF does **not** disable CSRF because `TESTING = True`; it reads
+`WTF_CSRF_ENABLED`. Six test files needed `app.config["WTF_CSRF_ENABLED"] = False` next to their
+`TESTING` line (7 points in all). `test_owner_notifications` did not: it builds a bare
+`Flask(__name__)` with only `webhook_bp` and no `CSRFProtect`. `tests/test_signup` is the only
+suite that runs anything with CSRF **on**, which makes it the only coverage the wiring has.
+
 ### Google Calendar Integration
 
 `integrations/` implements OAuth 2.0 onboarding for Google Calendar (Module 1). Routes are
@@ -1023,6 +1123,8 @@ src/static/
 ├── css/
 │   ├── theme.css         ← CSS variables, dark mode override, .theme-toggle button
 │   ├── login.css         ← login card + form styles (email AND password since S3a)
+│   ├── signup.css        ← public signup card; also hides the honeypot field
+│   ├── onboarding.css    ← the "primeiros passos" checklist
 │   ├── menu.css          ← post-login navigation hub
 │   ├── integrations.css  ← Google Calendar connection status page
 │   ├── inbox.css         ← inbox conversation list
@@ -1072,6 +1174,7 @@ Defined in `src/.env` and loaded via `config.py`:
 | `GOOGLE_REDIRECT_URI` | Must match the redirect URI registered in Google Cloud Console exactly |
 | `FLASK_ENV` | Defaults to `development`; not currently gating anything since `seed.py` was removed |
 | `DASHBOARD_USER` | The founder's **email**. Used once, with `DASHBOARD_PASSWORD`, to bootstrap the first dashboard user. A value without `@` is refused with a printed warning (it was `admin` before S3a, when this variable was read and used by nothing) |
+| `SIGNUP_ENABLED` | Turns the public signup screen on. **Defaults to `false`, and must stay false in production until S3b merges** — see the box at the top. While off, `/dashboard/signup` answers 404 |
 | `WHATSAPP_TOKEN` | Meta Cloud API token (currently unused) |
 | `WHATSAPP_PHONE_NUMBER_ID` | Meta Cloud API phone ID (currently unused) |
 
@@ -1138,6 +1241,14 @@ Defined in `src/.env` and loaded via `config.py`:
   seam is already in place: `handle_text_message()` and `receive_twilio_owner()` receive the
   resolved tenant and do not propagate it (grep `# S3b:`). **Until it merges, no second account
   in production** — see the box at the top of this file.
+- **Module S3c (done, shipped disabled)** — Public signup (`/dashboard/signup`,
+  `accounts/signup.py`, `accounts/onboarding.py`, migration 010) plus **CSRF across the whole
+  application** (Flask-WTF, with `webhook_bp` exempt). A gym owner creates their own account,
+  which calls the same `provision_tenant()` the CLI uses, and lands on a derived onboarding
+  checklist. Guarded by a honeypot and a per-IP ceiling counted in Postgres. **Behind
+  `SIGNUP_ENABLED`, which defaults to false** — it must stay off in production until S3b, because
+  a public signup manufactures the very second tenant the reads cannot yet isolate. See
+  `src/tests/test_signup/SIGNUP_TESTING.md`.
 - **Future (SaaS phase)** — beyond S3b: a funnel/metrics screen (S4) and billing (S5). Also
   pending: reminders before the class, and multi-operator identity (`users` already accepts two
   rows per tenant, but `messages.author = 'operator'` still cannot say which human replied).
@@ -1160,7 +1271,18 @@ Defined in `src/.env` and loaded via `config.py`:
   user deep-linked to `/dashboard/settings` lands on the menu instead. Do not "fix" this without
   the validation.
 - **No rate limiting on `/dashboard/login`.** scrypt makes brute force expensive per attempt,
-  but there is no lockout and no attempt counter.
+  but there is no lockout and no attempt counter. Module S3c added a per-IP ceiling to
+  `/dashboard/signup` only; pointing the same `accounts/signup.py` helpers at the login route
+  would close this, and was left out of S3c to keep that module's blast radius small.
+- **`signup_attempts` is never pruned.** One row per signup attempt, forever. Irrelevant at the
+  expected volume, and the fix is one statement when it stops being:
+  `DELETE FROM signup_attempts WHERE created_at < NOW() - INTERVAL '7 days';`
+- **The signup honeypot and IP ceiling stop scripts, not people.** Anyone willing to rotate
+  addresses and read the markup gets through. A CAPTCHA would be the upgrade, at the cost of the
+  "no third-party script" rule the project has held since the start.
+- **A gym that signs up with the wrong email has no way back in on its own** — no email
+  verification means nothing to recover to, and there is no password-reset screen. You fix it
+  with `python -m accounts.provision reset-password`.
 - **Neither data screen paginates or searches.** `list_conversations()` returns every session,
   `get_conversation()` every message, and `list_bookings_for_review()` every booking ever made —
   all uncapped. Fine for a pilot with one gym; the first busy tenant will need a limit, and the
