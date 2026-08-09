@@ -309,33 +309,50 @@ def _write_tenant(
     return user_id
 
 
-def set_whatsapp_number(tenant_id: str, raw_number: str | None) -> str:
-    """Point a tenant's inbound routing at its own Twilio number.
+def try_set_whatsapp_number(tenant_id: str, raw_number: str | None) -> tuple[bool, str]:
+    """Point a tenant's routing at its own Twilio number, saying whether it worked.
 
     Applies the same shape of guard Module S1 put on `owner_phone`, for the same
     reason: this is a ROUTING KEY, and a number that plays two roles makes
     routing ambiguous. The UNIQUE index added by migration 009 catches
     tenant-versus-tenant; these checks catch a number that is already an owner's
-    personal line or already a lead in `sessions`.
+    personal line or already a lead in `sessions`. Since Module S3d the same
+    column also decides the "From" of every OUTBOUND message, which raises the
+    price of a bad write: a wrong number here no longer just misroutes replies,
+    it stops the gym from sending at all.
+
+    TWO CALLERS, ONE RULE. The founder's CLI wants a line to print;
+    /dashboard/settings/whatsapp-number needs to know success from refusal to
+    pick a notice colour. Hence the pair: this function decides, and
+    set_whatsapp_number() below is the CLI's one-line view of it. Re-checking the
+    guards in the route is the mistake bot/confirmations.py documents — written
+    twice, a rule ends up right in only one of them.
 
     Args:
         tenant_id (str): The tenant to configure.
         raw_number (str | None): The number as typed, or None/empty to clear it.
 
     Returns:
-        str: A Portuguese description of what happened.
+        tuple[bool, str]: Whether the database changed, and a Portuguese
+        description of what happened, safe to show to a gym owner.
     """
+    # As mensagens são lidas por duas plateias — o fundador no terminal e o dono
+    # da academia na tela — então nenhuma delas cita o slug do tenant. Quem roda
+    # a CLI acabou de digitar --tenant-id, e para o dono o slug é jargão interno.
     if not raw_number:
         store.update_whatsapp_number(None, tenant_id=tenant_id)
-        return f"Número de WhatsApp removido do tenant '{tenant_id}'."
+        return True, (
+            "Número de WhatsApp removido. As mensagens voltam a sair pelo número "
+            "de sandbox até você cadastrar outro."
+        )
 
     clean: str | None = store.normalize_owner_phone(raw_number)
     if clean is None:
-        return "Número inválido: use de 10 a 15 dígitos (DDI + DDD + número)."
+        return False, "Número inválido: use de 10 a 15 dígitos (DDI + DDD + número)."
 
     owner: dict | None = store.get_owner_by_phone(clean)
     if owner is not None:
-        return (
+        return False, (
             f"Esse número já é o telefone pessoal do dono do tenant "
             f"'{owner['tenant_id']}'. Um número não pode ser os dois papéis."
         )
@@ -346,15 +363,31 @@ def set_whatsapp_number(tenant_id: str, raw_number: str | None) -> str:
             is_lead: bool = cur.fetchone() is not None
 
     if is_lead:
-        return (
+        return False, (
             "Esse número já pertence a uma conversa de lead. "
             "Usá-lo como número da academia sequestraria essa conversa."
         )
 
     if not store.update_whatsapp_number(clean, tenant_id=tenant_id):
-        return f"Nenhum tenant '{tenant_id}' encontrado."
+        return False, f"Nenhum tenant '{tenant_id}' encontrado."
 
-    return f"Número de WhatsApp do tenant '{tenant_id}' atualizado."
+    return True, (
+        "Número de WhatsApp salvo. É por ele que a IA passa a atender e a "
+        "responder os leads."
+    )
+
+
+def set_whatsapp_number(tenant_id: str, raw_number: str | None) -> str:
+    """The CLI's view of try_set_whatsapp_number(): just the message.
+
+    Args:
+        tenant_id (str): The tenant to configure.
+        raw_number (str | None): The number as typed, or None/empty to clear it.
+
+    Returns:
+        str: A Portuguese description of what happened.
+    """
+    return try_set_whatsapp_number(tenant_id, raw_number)[1]
 
 
 # ============================================================

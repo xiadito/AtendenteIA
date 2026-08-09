@@ -630,8 +630,16 @@ class SignupSuite:
         expect(not by_key["ai"]["done"], "a IA está com os textos-guia")
         expect(not by_key["classes"]["done"], "só existe a turma padrão")
         expect(not by_key["whatsapp"]["done"], "o número ainda não foi atribuído")
-        expect(by_key["whatsapp"]["action_endpoint"] is None,
-               "o passo do WhatsApp não pode ter botão: só o fundador resolve")
+        # DESDE O MÓDULO S3d ESTE PASSO TEM BOTÃO, e a mudança é de produto, não
+        # de implementação: o dono digita o próprio número na tela de
+        # configurações. O que ele continua não podendo fazer sozinho é a metade
+        # que vem ANTES — a liberação do Sender no Twilio —, e é isso que a
+        # descrição do passo precisa dizer. Um botão sem esse aviso faria o dono
+        # cadastrar um número que ainda não existe e o envio falharia calado.
+        expect_equal(by_key["whatsapp"]["action_endpoint"], "dashboard.settings",
+                     "o passo do WhatsApp deveria levar à tela de configurações")
+        expect("equipe" in by_key["whatsapp"]["description"],
+               "o passo precisa dizer que a liberação do número não é do dono")
         expect_equal(onboarding_steps.pending_count(self.tenant_a), 4, "pendências iniciais")
 
         # Conecta o Calendar por baixo, e a tela tem de mudar sozinha.

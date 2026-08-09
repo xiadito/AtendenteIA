@@ -918,6 +918,7 @@ def _settings_context(
     return {
         "ai_config": ai_form if ai_form is not None else ai_configs.get_ai_config(tenant_id),
         "owner_phone": notification_owner["owner_phone"] if notification_owner else None,
+        "whatsapp_number": store.get_whatsapp_number(tenant_id),
         "integration_status": owner["integration_status"] if owner else "disconnected",
         "google_email": owner["google_email"] if owner else None,
         "class_types": class_types.list_class_types(tenant_id),
@@ -1020,6 +1021,36 @@ def settings_save_account():
         return render_template("settings.html", **_settings_context(tenant_id, notice)), 200
 
     notice = {"kind": "success", "text": "Número do dono salvo."}
+    return render_template("settings.html", **_settings_context(tenant_id, notice)), 200
+
+
+@dashboard_bp.route("/settings/whatsapp-number", methods=["POST"])
+@require_auth
+def settings_save_whatsapp_number():
+    """Salva o número da academia — a linha por onde a IA atende (Módulo S3d).
+
+    FORMULÁRIO SEPARADO DO owner_phone, DE PROPÓSITO. São as duas chaves de
+    roteamento do projeto e elas fazem coisas opostas: `whatsapp_number` é a
+    linha DA ACADEMIA (o "To" que diz para qual academia o lead escreveu, e desde
+    o S3d o "From" de tudo que sai), `owner_phone` é o celular PESSOAL do dono (o
+    "From" que o identifica respondendo 1/2). Um clique não pode reescrever as
+    duas — é a mesma regra que o S1 usou para separar "IA" de "Conta".
+
+    AS GUARDAS NÃO MORAM AQUI. A rota traduz formulário em chamada e resultado em
+    aviso; quem decide é accounts/provision.py::try_set_whatsapp_number(), a
+    mesma função que a CLI do fundador usa. Repetir as checagens aqui daria duas
+    definições da mesma regra, livres para divergir.
+
+    O CAMPO VAZIO LIMPA O NÚMERO, e isso é uma operação legítima: devolve a
+    academia ao número do sandbox enquanto um Sender novo não sai. Por isso o
+    input não é `required`.
+    """
+    tenant_id: str = current_user.tenant_id
+    saved, message = provision.try_set_whatsapp_number(
+        tenant_id, request.form.get("whatsapp_number", "").strip()
+    )
+
+    notice = {"kind": "success" if saved else "error", "text": message}
     return render_template("settings.html", **_settings_context(tenant_id, notice)), 200
 
 

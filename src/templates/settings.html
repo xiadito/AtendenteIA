@@ -308,6 +308,32 @@
             </form>
 
             {#
+              Formulário SEPARADO do de cima, e não é estilo: são as duas chaves
+              de roteamento do projeto, com papéis opostos. O de cima é o celular
+              PESSOAL do dono (por onde ele responde 1/2); este é a linha DA
+              ACADEMIA, por onde a IA atende. Um botão só não pode reescrever as
+              duas — mesma regra que separou "IA" de "Conta" no Módulo S1.
+            #}
+            <form method="POST" action="{{ url_for('dashboard.settings_save_whatsapp_number') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <div class="field">
+                    <label for="whatsapp_number">WhatsApp da academia</label>
+                    <input type="text" id="whatsapp_number" name="whatsapp_number"
+                           value="{{ whatsapp_number or '' }}"
+                           placeholder="5521999999999">
+                    <span class="field-hint">
+                        O número que seus leads veem: é para ele que escrevem e é
+                        dele que a IA responde. <strong>Cadastre aqui só depois que
+                        nossa equipe avisar que o número foi liberado no Twilio</strong> —
+                        salvar um número que ainda não foi liberado faz o envio
+                        falhar. Deixe em branco para voltar ao número de testes.
+                    </span>
+                </div>
+
+                <button type="submit" class="btn-save">Salvar WhatsApp da academia</button>
+            </form>
+
+            {#
               Google é só leitura aqui: quem conecta, reconecta e desconecta é a
               tela de integrações, que já existe desde o Módulo 1. Esta seção
               mostra o estado e leva até lá.
