@@ -211,6 +211,37 @@ def find_tenant_by_whatsapp_number(to: str | None) -> str | None:
     return row["tenant_id"] if row else None
 
 
+def get_whatsapp_number(tenant_id: str = DEFAULT_TENANT_ID) -> str | None:
+    """Read a tenant's own WhatsApp number — the line its leads write to.
+
+    THE MIRROR OF find_tenant_by_whatsapp_number(). That one asks "which gym owns
+    this number?" on the way IN; this one asks "which number does this gym own?"
+    on the way OUT, so whatsapp/whatsapp_service.py can send the reply from the
+    gym's own line instead of one number shared by everybody (Module S3d).
+
+    A separate function rather than a column added to get_owner_credentials():
+    that one is the OAuth screen's reader and widening it would touch a screen
+    with no interest in phone numbers at all.
+
+    Args:
+        tenant_id (str): Tenant identifier.
+
+    Returns:
+        str | None: Plain digits (e.g. "5521999999999"), or None if the tenant
+        has no number registered or no owners row at all. None is not an error:
+        it is the sandbox state, where every gym shares one inbound number.
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT whatsapp_number FROM owners WHERE tenant_id = %s",
+                (tenant_id,),
+            )
+            row = cur.fetchone()
+
+    return row["whatsapp_number"] if row else None
+
+
 def resolve_tenant_by_whatsapp_number(to: str | None) -> str:
     """Resolve a tenant from an inbound "To", degrading to the pilot tenant.
 

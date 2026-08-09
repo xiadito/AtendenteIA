@@ -8,8 +8,10 @@ state is a second record of a fact the tables already hold, and the two drift.
 Tick a step by doing the work; untick it by undoing the work.
 
 The steps are ordered by what unblocks the most, and the last one is the only
-one the gym owner cannot do alone — which is exactly why it needs saying out
-loud on the screen instead of leaving them wondering why the bot is silent.
+one the gym owner cannot FINISH alone — which is exactly why it needs saying out
+loud on the screen instead of leaving them wondering why the bot is silent. Until
+Module S3d it had no button at all; now it has one, because the owner types the
+number, but the Twilio Sender approval that has to come first is still ours.
 """
 
 import logging
@@ -56,7 +58,6 @@ def get_steps(tenant_id: str) -> list[dict[str, Any]]:
             A step with no endpoint is one the owner cannot act on.
     """
     owner: dict | None = store.get_owner_credentials(tenant_id)
-    notification_row: dict | None = store.get_owner_for_notification(tenant_id)
 
     calendar_connected: bool = bool(
         owner and owner.get("integration_status") == "connected"
@@ -66,11 +67,12 @@ def get_steps(tenant_id: str) -> list[dict[str, Any]]:
     # provisioning seeds exactly one, the unlimited fallback.
     class_type_count: int = len(class_types.list_class_types(tenant_id))
 
-    # The gym's own inbound number. Only the founder can arrange it (it is a
-    # Twilio Sender approval), so this step has no button.
-    has_whatsapp_number: bool = bool(
-        notification_row is not None and _whatsapp_number(tenant_id)
-    )
+    # The gym's own line. Since Module S3d this step HAS a button: the owner
+    # types the number themselves on the settings screen. What they still cannot
+    # do alone is the half that comes first — the Twilio Sender approval — so the
+    # description says which part is whose, instead of pretending the button is
+    # the whole step.
+    has_whatsapp_number: bool = bool(store.get_whatsapp_number(tenant_id))
 
     return [
         {
@@ -112,39 +114,15 @@ def get_steps(tenant_id: str) -> list[dict[str, Any]]:
         {
             "key": "whatsapp",
             "title": "Número de WhatsApp",
-            "description": "Nossa equipe está preparando o número da sua academia no "
-                           "WhatsApp. Avisamos assim que estiver no ar — é o último "
-                           "passo para a IA começar a atender.",
+            "description": "Nossa equipe libera o número da sua academia no WhatsApp e "
+                           "avisa você. Com ele em mãos, grave-o em Configurações → "
+                           "Conta: é por esse número que a IA vai atender e responder "
+                           "seus leads.",
             "done": has_whatsapp_number,
-            "action_endpoint": None,
-            "action_label": None,
+            "action_endpoint": "dashboard.settings",
+            "action_label": "Configurar",
         },
     ]
-
-
-def _whatsapp_number(tenant_id: str) -> str | None:
-    """Read the tenant's own inbound number.
-
-    A thin read rather than a new store function: get_owner_credentials() does
-    not select this column, and widening it would touch the OAuth screen for no
-    reason.
-
-    Args:
-        tenant_id (str): The tenant to inspect.
-
-    Returns:
-        str | None: The number, or None when it is not configured yet.
-    """
-    from database.db import get_connection
-
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT whatsapp_number FROM owners WHERE tenant_id = %s", (tenant_id,)
-            )
-            row = cur.fetchone()
-
-    return row["whatsapp_number"] if row else None
 
 
 def pending_count(tenant_id: str) -> int:

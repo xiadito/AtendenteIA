@@ -9,7 +9,7 @@ import accounts.onboarding as onboarding_steps
 import accounts.provision as provision
 import accounts.signup as signup_guard
 import accounts.users as accounts_users
-from whatsapp.whatsapp_service import send_message
+from whatsapp.whatsapp_service import SenderNotConfiguredError, send_message
 from bot.handlers import handle_text_message
 import bot.ai_configs as ai_configs
 import bot.bookings as bookings
@@ -241,7 +241,23 @@ def receive_twilio_owner(
 
     if response is None:
         logger.info(f"Owner {owner_phone} sent an unrecognized reply (tenant {tenant_id})")
-        send_message(owner_phone, "Não entendi. Responda 1 para confirmar ou 2 para cancelar.")
+        # EMBRULHADO DE PROPÓSITO (Módulo S3d). Este é o único envio alcançável
+        # com um tenant que não tem whatsapp_number: no caminho sandbox o dono é
+        # achado pela varredura GLOBAL de get_owner_by_phone(), então o dono da
+        # academia B chega aqui com o tenant dele mesmo sem número registrado.
+        # Sem a guarda, a exceção sobe até receive_twilio(), o Twilio recebe 500
+        # e reenvia a mesma mensagem em loop. Um "não entendi" que não sai é um
+        # aborrecimento; um retry infinito do Twilio não é.
+        try:
+            send_message(
+                owner_phone,
+                "Não entendi. Responda 1 para confirmar ou 2 para cancelar.",
+                tenant_id=tenant_id,
+            )
+        except Exception:
+            logger.exception(
+                "Não foi possível responder ao dono do tenant %s.", tenant_id
+            )
         return
 
     row = owner_notifications.register_owner_response(owner_phone, response, tenant_id=tenant_id)
@@ -645,7 +661,21 @@ def inbox_reply(sender: str):
         )
 
     try:
-        send_message(sender, text)
+        send_message(sender, text, tenant_id=tenant_id)
+    except SenderNotConfiguredError:
+        # Capturado ANTES do genérico (Módulo S3d): "verifique a conexão" mandaria
+        # o operador tentar de novo para sempre, porque não há nada de errado com
+        # a conexão — falta o número da academia, e reenviar não resolve.
+        logger.warning("Tenant %s tentou responder sem whatsapp_number.", tenant_id)
+        return _conversation_messages_response(
+            sender,
+            tenant_id,
+            error=(
+                "Sua academia ainda não tem um número de WhatsApp configurado, "
+                "então não é possível enviar mensagens. Cadastre-o em "
+                "Configurações → Conta."
+            ),
+        )
     except Exception:
         logger.exception(f"Falha ao enviar resposta do operador para {sender}")
         return _conversation_messages_response(
@@ -888,6 +918,7 @@ def _settings_context(
     return {
         "ai_config": ai_form if ai_form is not None else ai_configs.get_ai_config(tenant_id),
         "owner_phone": notification_owner["owner_phone"] if notification_owner else None,
+        "whatsapp_number": store.get_whatsapp_number(tenant_id),
         "integration_status": owner["integration_status"] if owner else "disconnected",
         "google_email": owner["google_email"] if owner else None,
         "class_types": class_types.list_class_types(tenant_id),
@@ -990,6 +1021,36 @@ def settings_save_account():
         return render_template("settings.html", **_settings_context(tenant_id, notice)), 200
 
     notice = {"kind": "success", "text": "Número do dono salvo."}
+    return render_template("settings.html", **_settings_context(tenant_id, notice)), 200
+
+
+@dashboard_bp.route("/settings/whatsapp-number", methods=["POST"])
+@require_auth
+def settings_save_whatsapp_number():
+    """Salva o número da academia — a linha por onde a IA atende (Módulo S3d).
+
+    FORMULÁRIO SEPARADO DO owner_phone, DE PROPÓSITO. São as duas chaves de
+    roteamento do projeto e elas fazem coisas opostas: `whatsapp_number` é a
+    linha DA ACADEMIA (o "To" que diz para qual academia o lead escreveu, e desde
+    o S3d o "From" de tudo que sai), `owner_phone` é o celular PESSOAL do dono (o
+    "From" que o identifica respondendo 1/2). Um clique não pode reescrever as
+    duas — é a mesma regra que o S1 usou para separar "IA" de "Conta".
+
+    AS GUARDAS NÃO MORAM AQUI. A rota traduz formulário em chamada e resultado em
+    aviso; quem decide é accounts/provision.py::try_set_whatsapp_number(), a
+    mesma função que a CLI do fundador usa. Repetir as checagens aqui daria duas
+    definições da mesma regra, livres para divergir.
+
+    O CAMPO VAZIO LIMPA O NÚMERO, e isso é uma operação legítima: devolve a
+    academia ao número do sandbox enquanto um Sender novo não sai. Por isso o
+    input não é `required`.
+    """
+    tenant_id: str = current_user.tenant_id
+    saved, message = provision.try_set_whatsapp_number(
+        tenant_id, request.form.get("whatsapp_number", "").strip()
+    )
+
+    notice = {"kind": "success" if saved else "error", "text": message}
     return render_template("settings.html", **_settings_context(tenant_id, notice)), 200
 
 

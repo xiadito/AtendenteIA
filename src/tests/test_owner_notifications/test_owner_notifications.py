@@ -35,7 +35,7 @@ MAX_ATTEMPTS_FOR_CLI = 1000
 
 def _install_console_send() -> None:
     """Replace the WhatsApp sender with one that prints to the terminal."""
-    def _print_send(to: str, text: str) -> str:
+    def _print_send(to: str, text: str, tenant_id: str = "default") -> str:
         print(f"\n📣 Corujai → dono {to}:\n{text}\n")
         return "SM-console"
 

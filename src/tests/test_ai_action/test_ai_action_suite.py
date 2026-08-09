@@ -282,12 +282,17 @@ class AiStub:
 
 
 class SendCapture:
-    """Stands in for whatsapp_service.send_message: records every reply."""
+    """Stands in for whatsapp_service.send_message: records every reply.
+
+    tenant_id is accepted and ignored (Module S3d). A double is NOT saved by the
+    default on the real signature — the caller is what passes the argument — so
+    without it every handler turn would fail with an unexpected keyword.
+    """
 
     def __init__(self) -> None:
         self.sent: list[tuple[str, str]] = []
 
-    def __call__(self, sender: str, message: str) -> None:
+    def __call__(self, sender: str, message: str, tenant_id: str = "default") -> None:
         self.sent.append((sender, message))
 
     def count_for(self, sender: str) -> int:

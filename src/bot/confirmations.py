@@ -125,7 +125,7 @@ def _notify_lead(booking: dict, decision: str, tenant_id: str) -> bool:
     """
     try:
         text = _compose_lead_message(booking, decision, tenant_id)
-        whatsapp_service.send_message(booking["sender"], text)
+        whatsapp_service.send_message(booking["sender"], text, tenant_id=tenant_id)
         # is_read=True: the operator's unread count is for what the LEAD says,
         # and this is the attendant talking (see bot/messages.py).
         messages.add_message(booking["sender"], "ai", text, is_read=True, tenant_id=tenant_id)
