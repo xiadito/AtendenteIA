@@ -39,6 +39,12 @@
                 <span class="menu-desc">Confirmar ou cancelar as aulas experimentais</span>
             </a>
 
+            <a class="menu-item" href="{{ url_for('dashboard.metrics_dashboard') }}">
+                <span class="menu-icon">📊</span>
+                <span class="menu-label">Métricas</span>
+                <span class="menu-desc">Ver o funil: leads, agendamentos e confirmações</span>
+            </a>
+
             <a class="menu-item" href="{{ url_for('integrations.google_status') }}">
                 <span class="menu-icon">📅</span>
                 <span class="menu-label">Autenticação Google</span>
@@ -51,6 +57,36 @@
                 <span class="menu-desc">Ajustar a atendente virtual e os dados da conta</span>
             </a>
         </nav>
+
+        {# Resumo do funil (Módulo S4, decisão 19C). Três números, os mesmos que a
+           tela cheia calcula — get_funnel_summary() é um wrapper fino sobre
+           get_funnel(), justamente para os dois lugares nunca discordarem.
+
+           Nenhum destes números mede comparecimento, e não existe número que meça:
+           "confirmados" é a resposta que VOCÊ deu, não a presença do lead. Ver a
+           nota no rodapé de metrics.html e o problema P1 no CLAUDE.md. #}
+        <section class="summary" aria-label="Resumo do funil">
+            <p class="summary-title">Últimos {{ summary.period_days }} dias</p>
+            {% if summary.has_data %}
+                <div class="summary-figures">
+                    <div class="summary-figure">
+                        <span class="summary-value">{{ summary.leads }}</span>
+                        <span class="summary-label">Leads</span>
+                    </div>
+                    <div class="summary-figure">
+                        <span class="summary-value">{{ summary.booked }}</span>
+                        <span class="summary-label">Agendamentos</span>
+                    </div>
+                    <div class="summary-figure">
+                        <span class="summary-value">{{ summary.confirmed }}</span>
+                        <span class="summary-label">Confirmados</span>
+                    </div>
+                </div>
+            {% else %}
+                <p class="summary-empty">Sem dados no período ainda.</p>
+            {% endif %}
+            <a class="summary-link" href="{{ url_for('dashboard.metrics_dashboard') }}">Ver métricas →</a>
+        </section>
 
         {# Desde o Módulo S3a o painel sabe QUEM está logado — current_user vem do
            Flask-Login, registrado como global de template por init_auth(). É a

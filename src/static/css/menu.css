@@ -76,6 +76,64 @@ h1 {
     opacity: 0.7;
 }
 
+/* Resumo do funil (Módulo S4). Fica ABAIXO da navegação, não acima: o menu é
+   para chegar a algum lugar, e três números não podem empurrar os atalhos para
+   fora da primeira tela num celular. */
+.summary {
+    margin-top: 1.75rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid var(--input-border);
+}
+
+.summary-title {
+    margin: 0 0 0.9rem;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    opacity: 0.55;
+}
+
+.summary-figures {
+    display: flex;
+    justify-content: center;
+    gap: 2.5rem;
+    flex-wrap: wrap;
+}
+
+.summary-figure {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+}
+
+.summary-value {
+    font-size: 1.6rem;
+    font-weight: 700;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+}
+
+.summary-label {
+    font-size: 0.78rem;
+    opacity: 0.65;
+}
+
+.summary-empty {
+    margin: 0;
+    font-size: 0.85rem;
+    opacity: 0.6;
+}
+
+.summary-link {
+    display: inline-block;
+    margin-top: 1rem;
+    font-size: 0.85rem;
+    color: var(--brand);
+    text-decoration: none;
+}
+
+.summary-link:hover { text-decoration: underline; }
+
 /* Quem está logado (Módulo S3a). Discreto de propósito: é confirmação, não
    informação que alguém vem buscar. */
 .account-line {
