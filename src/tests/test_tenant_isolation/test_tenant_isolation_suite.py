@@ -751,14 +751,20 @@ class TenantIsolationSuite:
         ]
         expect_equal(len(pending), 2, "notificações pendentes das academias de teste")
 
-        sent: list[tuple[str, str]] = []
+        # O dublê recebe o tenant também (Módulo S3d): o cron passa o tenant da
+        # LINHA para o send_message, e é ele que decide por qual número a
+        # notificação sai. Capturado aqui para que o teste cubra as duas metades
+        # da resolução por linha — o texto E o remetente.
+        sent: list[tuple[str, str, str]] = []
         with patched(drain.owner_notifications, "list_pending_notifications",
                      lambda max_attempts: pending), \
              patched(drain.whatsapp_service, "send_message",
-                     lambda phone, text: sent.append((phone, text))):
+                     lambda phone, text, tenant_id="default": sent.append(
+                         (phone, text, tenant_id))):
             expect_equal(drain.main(), 0, "código de saída do cron")
 
-        by_phone = {phone: text for phone, text in sent}
+        by_phone = {phone: text for phone, text, _ in sent}
+        tenant_by_phone = {phone: tenant for phone, _, tenant in sent}
         expect(self.owner_phone_b in by_phone,
                f"o dono da Beta não recebeu nada: {list(by_phone)}")
         expect(
@@ -773,7 +779,11 @@ class TenantIsolationSuite:
             "Adultos Alfa" in by_phone[self.owner_phone_a],
             f"a mensagem do dono da Alfa saiu errada: {by_phone[self.owner_phone_a]!r}",
         )
-        return "cada envio resolve rótulos e reserva no tenant da própria linha"
+        expect_equal(tenant_by_phone[self.owner_phone_a], self.tenant_a,
+                     "o envio ao dono da Alfa saiu pelo tenant errado")
+        expect_equal(tenant_by_phone[self.owner_phone_b], self.tenant_b,
+                     "o envio ao dono da Beta saiu pelo tenant errado")
+        return "cada envio resolve rótulos, reserva e remetente no tenant da própria linha"
 
     def test_13_dashboard_shows_only_its_own_tenant(self) -> str:
         """Logado como a Beta, o painel não mostra nada da Alfa.

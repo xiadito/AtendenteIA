@@ -9,7 +9,7 @@ import accounts.onboarding as onboarding_steps
 import accounts.provision as provision
 import accounts.signup as signup_guard
 import accounts.users as accounts_users
-from whatsapp.whatsapp_service import send_message
+from whatsapp.whatsapp_service import SenderNotConfiguredError, send_message
 from bot.handlers import handle_text_message
 import bot.ai_configs as ai_configs
 import bot.bookings as bookings
@@ -241,7 +241,23 @@ def receive_twilio_owner(
 
     if response is None:
         logger.info(f"Owner {owner_phone} sent an unrecognized reply (tenant {tenant_id})")
-        send_message(owner_phone, "Não entendi. Responda 1 para confirmar ou 2 para cancelar.")
+        # EMBRULHADO DE PROPÓSITO (Módulo S3d). Este é o único envio alcançável
+        # com um tenant que não tem whatsapp_number: no caminho sandbox o dono é
+        # achado pela varredura GLOBAL de get_owner_by_phone(), então o dono da
+        # academia B chega aqui com o tenant dele mesmo sem número registrado.
+        # Sem a guarda, a exceção sobe até receive_twilio(), o Twilio recebe 500
+        # e reenvia a mesma mensagem em loop. Um "não entendi" que não sai é um
+        # aborrecimento; um retry infinito do Twilio não é.
+        try:
+            send_message(
+                owner_phone,
+                "Não entendi. Responda 1 para confirmar ou 2 para cancelar.",
+                tenant_id=tenant_id,
+            )
+        except Exception:
+            logger.exception(
+                "Não foi possível responder ao dono do tenant %s.", tenant_id
+            )
         return
 
     row = owner_notifications.register_owner_response(owner_phone, response, tenant_id=tenant_id)
@@ -645,7 +661,21 @@ def inbox_reply(sender: str):
         )
 
     try:
-        send_message(sender, text)
+        send_message(sender, text, tenant_id=tenant_id)
+    except SenderNotConfiguredError:
+        # Capturado ANTES do genérico (Módulo S3d): "verifique a conexão" mandaria
+        # o operador tentar de novo para sempre, porque não há nada de errado com
+        # a conexão — falta o número da academia, e reenviar não resolve.
+        logger.warning("Tenant %s tentou responder sem whatsapp_number.", tenant_id)
+        return _conversation_messages_response(
+            sender,
+            tenant_id,
+            error=(
+                "Sua academia ainda não tem um número de WhatsApp configurado, "
+                "então não é possível enviar mensagens. Cadastre-o em "
+                "Configurações → Conta."
+            ),
+        )
     except Exception:
         logger.exception(f"Falha ao enviar resposta do operador para {sender}")
         return _conversation_messages_response(

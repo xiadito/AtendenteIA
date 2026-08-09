@@ -250,7 +250,9 @@ class SendCapture:
         self.sent: list[tuple[str, str]] = []
         self.raise_error = raise_error
 
-    def __call__(self, to: str, text: str) -> str:
+    def __call__(self, to: str, text: str, tenant_id: str = "default") -> str:
+        # tenant_id aceito e ignorado (Módulo S3d): o dublê não é salvo pelo
+        # default da assinatura real, porque quem passa o argumento é quem chama.
         if self.raise_error:
             raise RuntimeError("stubbed send failure")
         self.sent.append((to, text))

@@ -31,7 +31,7 @@ from database.db import get_connection  # noqa: E402
 
 def _install_console_send() -> None:
     """Replace the WhatsApp sender with one that prints to the terminal."""
-    def _print_send(sender: str, message: str) -> None:
+    def _print_send(sender: str, message: str, tenant_id: str = "default") -> None:
         print(f"\n🤖 Corujai → {sender}:\n{message}\n")
 
     whatsapp_service.send_message = _print_send

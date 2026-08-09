@@ -61,7 +61,7 @@ def _install_console_send() -> None:
     through the module. Anything that reaches send_message from here is printed,
     never sent.
     """
-    def _print_send(to: str, text: str) -> str:
+    def _print_send(to: str, text: str, tenant_id: str = "default") -> str:
         print(f"\n📲 Corujai → {to}:\n{text}\n")
         return "SM-console"
 

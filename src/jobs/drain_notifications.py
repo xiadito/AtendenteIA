@@ -100,7 +100,9 @@ def main() -> int:
                 labels_by_tenant[tenant_id] = class_types.load_class_types(tenant_id)["labels"]
 
             text = _compose_message(notification, labels_by_tenant[tenant_id])
-            whatsapp_service.send_message(notification["owner_phone"], text)
+            whatsapp_service.send_message(
+                notification["owner_phone"], text, tenant_id=tenant_id
+            )
             owner_notifications.mark_sent(notification["id"])
             logger.info("Notification %s delivered to owner.", notification["id"])
         except Exception:
