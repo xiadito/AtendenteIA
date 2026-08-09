@@ -106,27 +106,33 @@ python tests/test_signup/test_signup_suite.py
 
 # Module S3b — per-tenant read isolation (two fixture gyms; no network at all)
 python tests/test_tenant_isolation/test_tenant_isolation_suite.py
+
+# Module S4 — funnel metrics (three fixture gyms; no network at all)
+python tests/test_metrics/test_metrics_suite.py
 ```
 
 Each suite prints a PASS/FAIL report and exits non-zero on failure; SKIPs don't fail the run.
 Each module also has a manual CLI (`test_scheduling.py`, `test_ai_action.py`,
 `test_owner_notifications.py`, `test_inbox.py`, `test_confirmation.py`, `test_settings.py`,
-`test_class_types.py`, `test_accounts.py`, `test_signup.py`, `test_tenant_isolation.py`) and a
+`test_class_types.py`, `test_accounts.py`, `test_signup.py`, `test_tenant_isolation.py`,
+`test_metrics.py`) and a
 testing roteiro (`SCHEDULING_ENGINE_TESTING.md`, `AI_ACTION_TESTING.md`,
 `OWNER_NOTIFICATIONS_TESTING.md`, `INBOX_TESTING.md`, `CONFIRMATION_TESTING.md`,
 `SETTINGS_TESTING.md`, `CLASS_TYPES_TESTING.md`, `ACCOUNTS_TESTING.md`, `SIGNUP_TESTING.md`,
-`TENANT_ISOLATION_TESTING.md`).
+`TENANT_ISOLATION_TESTING.md`, `METRICS_TESTING.md`).
 
 Each suite owns a sender prefix so their teardowns can never collide: `5521000...` (scheduling),
 `5522000...` (AI action), `5523000...` (owner notifications), `5524000...` (inbox),
 `5525000...` (confirmation), `5526000...` (settings), `5527000...` (class types),
-`5528000...` (accounts), `5529000...` (signup), `5530000...` (tenant isolation).
+`5528000...` (accounts), `5529000...` (signup), `5530000...` (tenant isolation),
+`5531000...` (metrics).
 
-**`test_tenant_isolation` owns an email domain of its own**, `@suite-s3b.corujai.test`, which
-deliberately does NOT match the `%@suite.corujai.test` pattern `test_accounts` deletes in its
-teardown — otherwise one suite's cleanup could delete the other's fixtures. It creates two
-fixture gyms under `suite-s3b-` and has **no `/tmp` backup**, for the same reason `test_accounts`
-has none: it never writes to the pilot's rows.
+**`test_tenant_isolation` and `test_metrics` own an email domain each**,
+`@suite-s3b.corujai.test` and `@suite-s4.corujai.test`, which deliberately do NOT match the
+`%@suite.corujai.test` pattern `test_accounts` deletes in its teardown — otherwise one suite's
+cleanup could delete the other's fixtures. They create fixture gyms under `suite-s3b-` /
+`suite-s4-` and have **no `/tmp` backup**, for the same reason `test_accounts` has none: they
+never write to the pilot's rows.
 
 **Since Module S3a every suite that drives the dashboard creates its own `users` row and logs in
 through the real `POST /dashboard/login`.** Stuffing `session["dashboard_authenticated"] = True`
@@ -136,7 +142,7 @@ can never delete each other's row, and each deletes only its own. Forging Flask-
 session keys (`_user_id`, `_fresh`) was rejected: they are undocumented, and they would still
 need a real `users` row for the `user_loader` to resolve.
 
-**Since Module S3c, seven test files also carry `app.config["WTF_CSRF_ENABLED"] = False`** beside
+**Since Module S3c, eight test files also carry `app.config["WTF_CSRF_ENABLED"] = False`** beside
 their `TESTING` line. Flask-WTF does not disable CSRF for `TESTING`; without that line every POST
 through a test client returns 400 without reaching the code under test. `test_signup` is the
 exception that proves the wiring: it is the only suite that runs anything with CSRF **on**.
@@ -259,6 +265,39 @@ HAVING COUNT(*) FILTER (WHERE is_fallback) = 0;
 
 -- How far ahead the AI looks for slots
 SELECT tenant_id, days_ahead FROM scheduling_configs;
+
+-- THE FUNNEL (Module S4), the two questions /dashboard/metrics asks. The tenant is
+-- not optional in either: this is the screen the owner reads every day, so an
+-- unfiltered COUNT here is the most visible leak the schema allows.
+
+-- LEADS: first contact per lead. The ones inside the window are what the screen counts.
+-- NOT sessions.conversation_started_at, which the 1h timeout rewrites — see Funnel Metrics.
+SELECT sender, MIN(created_at) AS first_contact
+FROM messages
+WHERE tenant_id = 'default' AND author = 'lead'
+GROUP BY sender
+HAVING MIN(created_at) >= NOW() - INTERVAL '30 days'
+ORDER BY 2 DESC;
+
+-- BOOKINGS: one cohort, four slices. Note created_at — NOT slot_start (when the class
+-- is) and NOT updated_at (when the owner decided). The sum always closes:
+-- agendamentos = confirmados + cancelados + pendentes.
+SELECT
+    COUNT(*)                                                AS agendamentos,
+    COUNT(*) FILTER (WHERE status = 'confirmed')            AS confirmados,
+    COUNT(*) FILTER (WHERE status = 'cancelled')            AS cancelados,
+    COUNT(*) FILTER (WHERE status = 'pending_confirmation') AS pendentes
+FROM trial_bookings
+WHERE tenant_id = 'default'
+  AND created_at >= NOW() - INTERVAL '30 days';
+
+-- These two use a ROLLING window; the screen aligns the start to midnight in
+-- America/Sao_Paulo, so short windows can differ by a few hours of data. To compare
+-- number for number, use `python tests/test_metrics/test_metrics.py rows`, which
+-- prints the exact boundary the screen used.
+--
+-- There is no attendance query here, and there can't be: no column records whether
+-- the lead walked in. See problem P1 in Known Issues before writing one.
 
 -- Set the owner's WhatsApp number (plain digits, no "whatsapp:+"). Since Module S1 the
 -- "Conta" section of /dashboard/settings does this properly — and unlike this bare UPDATE it
@@ -675,6 +714,7 @@ A login-protected web dashboard is available at `/dashboard/menu`. Routes are de
 | `/dashboard/bookings/list` | GET | Partial of the list, target of the decision swap |
 | `/dashboard/bookings/<booking_id>/confirm` | POST | Confirms a trial class |
 | `/dashboard/bookings/<booking_id>/cancel` | POST | Cancels a trial class |
+| `/dashboard/metrics` | GET | Funnel for the period in `?period=7\|30\|90` (Module S4) |
 | `/dashboard/settings` | GET | Settings screen — AI, classes and account sections |
 | `/dashboard/settings/ai` | POST | Saves the customizable prompt layer (`ai_configs`) |
 | `/dashboard/settings/account` | POST | Saves `owners.owner_phone`, behind two guards |
@@ -695,8 +735,9 @@ creating, so an unknown id is answered with a Portuguese notice inside the list.
 `GET /` (in `webhook_bp`) simply redirects to `dashboard.menu` — there is no separate landing
 page. Login redirects to the menu too, so the menu is the single entry point to the UI.
 
-**The dashboard has two data screens** — the inbox (Module 5) and the bookings review
-(Module 6), the first ones since the order list went away with the `orders` feature — **and
+**The dashboard has three data screens** — the inbox (Module 5), the bookings review
+(Module 6), the first ones since the order list went away with the `orders` feature, and the
+funnel metrics (Module S4), the only one that shows an aggregate rather than rows — **and
 one configuration screen**, settings (Module S1), which is the first place in the project
 where configuration is written from the UI instead of by hand-run SQL.
 
@@ -1201,10 +1242,95 @@ from the parent page — which is why the partials (`_bookings_list.html`,
 `_conversation_messages.html`) carry no token and must not: they are re-rendered constantly.
 
 **Trap:** Flask-WTF does **not** disable CSRF because `TESTING = True`; it reads
-`WTF_CSRF_ENABLED`. Six test files needed `app.config["WTF_CSRF_ENABLED"] = False` next to their
-`TESTING` line (7 points in all). `test_owner_notifications` did not: it builds a bare
-`Flask(__name__)` with only `webhook_bp` and no `CSRFProtect`. `tests/test_signup` is the only
-suite that runs anything with CSRF **on**, which makes it the only coverage the wiring has.
+`WTF_CSRF_ENABLED`. Seven test files needed `app.config["WTF_CSRF_ENABLED"] = False` next to their
+`TESTING` line (8 points in all — `test_metrics` is the newest). `test_owner_notifications` did
+not: it builds a bare `Flask(__name__)` with only `webhook_bp` and no `CSRFProtect`.
+`tests/test_signup` is the only suite that runs anything with CSRF **on**, which makes it the
+only coverage the wiring has.
+
+### Funnel Metrics (Module S4)
+
+The screen that answers the question that sells the product: *is the Corujai producing anything
+for me?* Four numbers per gym — leads, bookings, confirmations, cancellations — plus the
+conversion between them, over 7, 30 or 90 days. `/dashboard/metrics`, backed by
+`bot/metrics.py`, with three of the numbers repeated on `/dashboard/menu`.
+
+**Read-only, and no migration.** There is no metrics table and no stored counter: a counter is a
+second record of a fact `messages` and `trial_bookings` already hold, and the two drift (same
+reasoning that kept `accounts/onboarding.py` stateless). Two indexed reads per page, both served
+by indexes migration 011 already built for other reasons.
+
+**What each number counts — this is the specification, not a summary.** The window is N calendar
+days *including today*, from `00:00` in `America/Sao_Paulo`:
+
+| Number | From | Counts |
+|---|---|---|
+| **Leads** | `messages` | Senders whose **first contact** fell in the window: `MIN(created_at)` where `author = 'lead'`, grouped by sender |
+| **Agendamentos** | `trial_bookings` | Bookings **created** in the window (`created_at`), any status |
+| **Confirmados** | `trial_bookings` | Of those, the ones that are `confirmed` **today** |
+| **Cancelados** | `trial_bookings` | Of those, `cancelled` today |
+| **Pendentes** | `trial_bookings` | Of those, `pending_confirmation` today. Not a funnel stage — it exists so the sum closes |
+
+**ONE COHORT, ANCHORED ON `created_at`.** All four booking numbers describe the same set of rows,
+sliced by the status each carries today, which buys the property the owner can check by eye:
+`agendamentos = confirmados + cancelados + pendentes`. Anchoring the decisions on `updated_at`
+("what did the owner decide this week?") is a legitimate but DIFFERENT question, and mixing the
+two anchors in one table would allow more confirmations than bookings in the same period.
+
+One honest exception: `agendamentos ÷ leads` **can exceed 100%** — a lead whose first contact
+predates the window may book inside it, so the two sets are not nested. The screen shows the real
+figure and clamps only the bar.
+
+**THE NUMBERS COME FROM THE LOG, NEVER FROM `sessions.stage`.** `stage` is the *current* state of
+a conversation, not a history: a lead who booked and then had the booking cancelled can be at any
+stage, so counting `stage = 'booked'` undercounts and overcounts at once. `trial_bookings` is the
+durable ledger. Suite scenario 3 pins this by setting a lead's stage to `'booked'` with no
+booking row behind it and proving the count does not move.
+
+**`sessions.conversation_started_at` is NOT "when the lead arrived", and this is the module's
+main trap.** The 1h inactivity timeout rewrites it with `NOW()`
+(`bot/handlers.py::_reset_session`), so it means "when the CURRENT conversation started" — a lead
+from March who writes again today would be counted as arriving today. And `sessions` has no
+`created_at` at all. So leads are counted from `messages`, where a row is only ever removed by
+`clear_session()`, making `MIN(created_at)` a first contact that does not move. The `GROUP BY` is
+served by `idx_messages_tenant_sender_created_at (tenant_id, sender, created_at)`, which
+migration 011 built for the inbox.
+
+**Zero denominators answer `None`, not `0.0`.** "This gym has no conversion rate" is a different
+statement from "its rate is zero", and the screen renders them differently (`—` vs `0%`).
+Checked before the division, so `NaN`/`Infinity` are unreachable.
+
+**`TIMEZONE` is re-declared in `bot/metrics.py` rather than imported from `bot/scheduling.py`,**
+which owns the same constant. That module imports `integrations.google_calendar` at module level,
+which pulls in `googleapiclient` — importing the constant would drag the whole Google client stack
+into a screen that only reads Postgres, and into the suite covering it. If a third module ever
+needs it, promote it to `config.py`.
+
+**Trap:** the view is `metrics_dashboard()`, **not** `metrics()`. `routes.py` does
+`import bot.metrics as metrics` at the top, and a view named `metrics` would shadow the module for
+every route in the file — the same trap that named the bookings view `bookings_review`. The
+endpoint is `dashboard.metrics_dashboard`.
+
+**No CSRF surface added.** The period is a query string on a `GET` (`?period=7|30|90`), not a
+form, so the screen introduces no POST. `metrics.parse_period()` is a total function: anything
+outside `ALLOWED_PERIODS` answers 30, so a hand-typed `?period=3650` cannot turn the dashboard
+into a full-table scan or a 500.
+
+**`get_funnel_summary()` is a thin wrapper over `get_funnel()`, not a second query.** "Lighter"
+means fewer numbers on the menu, not fewer reads — a hand-tuned summary query would be a second
+definition of the same numbers, free to drift from the screen the owner clicks through to, which
+is the bug that makes a dashboard stop being believed. Suite scenario 15 pins the two together.
+
+**No chart library.** The funnel is four `<div>`s with a `width` in `%`. HTMX is the project's only
+third-party script and this screen does not even use it: the bars arrive with the HTML, work with
+JavaScript off, and inherit dark mode from `theme.css` with no configuration.
+
+**ATTENDANCE IS NOT MEASURED AND MUST NOT BE DERIVED — see problem P1 in Known Issues.** The
+screen carries a plain-Portuguese note saying so, and that note is part of the module, not
+decoration: without it, "Confirmados" gets read as presence. Suite scenario 10 fails the run if an
+attendance-shaped key or label appears, **and** if the note is ever deleted.
+
+Testing roteiro: `src/tests/test_metrics/METRICS_TESTING.md`.
 
 ### Google Calendar Integration
 
@@ -1246,6 +1372,7 @@ src/static/
 │   ├── inbox.css         ← inbox conversation list
 │   ├── conversation.css  ← one conversation + reply box
 │   ├── bookings.css      ← bookings review list + decision buttons
+│   ├── metrics.css       ← funnel screen: period picker + the CSS-only bars
 │   └── settings.css      ← settings screen: the AI, classes and account sections
 └── js/
     └── theme.js          ← shared dark/light theme toggle (all pages)
@@ -1253,7 +1380,7 @@ src/static/
 
 Every stylesheet is paired with exactly one **page** template in `src/templates/`
 (`login.html`, `menu.html`, `integrations_google.html`, `inbox.html`, `conversation.html`,
-`bookings.html`, `settings.html`), all
+`bookings.html`, `metrics.html`, `settings.html`), all
 of which are rendered by a route. Deleting a template means deleting its stylesheet too — that
 is why removing the order list took `dashboard.html` and `dashboard.css` with it.
 
@@ -1264,6 +1391,8 @@ so they inherit the parent's CSS and must never carry `<html>`/`<head>`.
 
 **HTMX is loaded from a CDN** (`unpkg.com/htmx.org@2.0.4`) in the two inbox pages. There is no
 build pipeline and no bundler in this project, deliberately — a script tag is the whole setup.
+It is also the project's **only** third-party script: the Module S4 funnel is drawn with `<div>`s
+and a `width` in `%`, not with a chart library, so `metrics.html` loads no CDN at all.
 Polling is `hx-trigger="every 5s"`, and each page swaps only its partial so the head, the theme
 and the toggle button are never reloaded.
 
@@ -1369,12 +1498,40 @@ Defined in `src/.env` and loaded via `config.py`:
   `SIGNUP_ENABLED`, which **shipped defaulting to false** — a hard interlock, since a public signup
   manufactures the very second tenant the reads could not isolate — and **defaults to true since
   Module S3b**, which removed the reason. See `src/tests/test_signup/SIGNUP_TESTING.md`.
-- **Future (SaaS phase)** — beyond S3b: a funnel/metrics screen (S4) and billing (S5). Also
-  pending: reminders before the class, and multi-operator identity (`users` already accepts two
-  rows per tenant, but `messages.author = 'operator'` still cannot say which human replied).
+- **Module S4 (done)** — Funnel metrics per tenant (`bot/metrics.py`, `/dashboard/metrics`,
+  `metrics.html`). Four numbers and three conversion rates over 7/30/90 days: leads (first
+  contact, from `messages`), bookings, confirmations and cancellations (one cohort anchored on
+  `trial_bookings.created_at`, sliced by today's status). **No migration and no stored counter** —
+  two indexed reads over rows the product already produces, on indexes migration 011 had already
+  built. The menu gains a three-number summary from the same function, so the two can never
+  disagree. Two traps it exists to avoid: the numbers come from the booking LOG and never from
+  `sessions.stage`, and leads come from `MIN(messages.created_at)` and never from
+  `conversation_started_at`, which the 1h timeout rewrites. **It does not measure attendance and
+  says so on screen** — see problem P1 below. See `src/tests/test_metrics/METRICS_TESTING.md`.
+- **Future (SaaS phase)** — beyond S4: billing (S5), and the capture moment that would make P1
+  answerable. Also pending: reminders before the class, and multi-operator identity (`users`
+  already accepts two rows per tenant, but `messages.author = 'operator'` still cannot say which
+  human replied).
 
 ## Known Issues / TODOs
 
+- **P1 — ATTENDANCE IS NOT MEASURABLE, AND MUST NOT BE FAKED FROM `confirmed`.**
+  `trial_bookings` has three statuses — `pending_confirmation`, `confirmed`, `cancelled` — and
+  **none of them records whether the lead showed up to the class**. `confirmed` means *the owner
+  answered that the class will happen*: a decision taken days BEFORE the class, over WhatsApp or
+  on `/dashboard/bookings`. It is not an observation taken after it.
+  So any label like "taxa de comparecimento", "show rate", "presença" or "frequência" would be a
+  number **invented** from one that means something else, presented as a measurement on the only
+  screen the owner makes decisions from. Module S4 therefore counts leads, bookings,
+  confirmations and cancellations and stops there — and `metrics.html` carries a note telling the
+  owner so in plain Portuguese, because otherwise "Confirmados" gets read as presence anyway.
+  `tests/test_metrics` scenario 10 fails the run if an attendance-shaped key or funnel label ever
+  appears, **and** if that note is ever deleted.
+  Closing this is a **product** decision, not an implementation one: it needs a new booking state
+  *and* a moment of capture that does not exist — nobody currently tells the system that the class
+  happened and who walked in. Plausible answers are a post-class WhatsApp ping to the owner
+  (reusing the `owner_notifications` cron) or a button on the bookings screen after `slot_start`
+  has passed. Until one of them ships, do not derive attendance from anything.
 - **The tenant defaults are a silent failure mode.** Every read in `bot/session.py`,
   `bot/messages.py`, `bot/bookings.py` and friends takes `tenant_id: str = DEFAULT_TENANT_ID`.
   That default is what keeps the pilot's callers and the suites unchanged — and it means a NEW
@@ -1404,10 +1561,24 @@ Defined in `src/.env` and loaded via `config.py`:
 - **A gym that signs up with the wrong email has no way back in on its own** — no email
   verification means nothing to recover to, and there is no password-reset screen. You fix it
   with `python -m accounts.provision reset-password`.
-- **Neither data screen paginates or searches.** `list_conversations()` returns every session,
-  `get_conversation()` every message, and `list_bookings_for_review()` every booking ever made —
-  all uncapped. Fine for a pilot with one gym; the first busy tenant will need a limit, and the
-  bookings screen will need a date filter before it grows past a scroll.
+- **Neither row-listing screen paginates or searches.** `list_conversations()` returns every
+  session, `get_conversation()` every message, and `list_bookings_for_review()` every booking ever
+  made — all uncapped. Fine for a pilot with one gym; the first busy tenant will need a limit, and
+  the bookings screen will need a date filter before it grows past a scroll. The metrics screen
+  (S4) is exempt: it returns aggregates, never rows, so its response size does not grow with the
+  gym.
+- **The metrics screen has no index of its own, deliberately.** `_count_new_leads()` groups
+  `messages` by sender and `_count_bookings()` scans one tenant's `trial_bookings` by
+  `created_at`. Both ride indexes migration 011 built for other queries
+  (`idx_messages_tenant_sender_created_at`, `idx_trial_bookings_tenant_sender`), which is right at
+  pilot volume and is the first thing to revisit if the screen ever feels slow: the fix is a
+  migration 012 adding `trial_bookings (tenant_id, created_at)`. Measure before adding it.
+- **The funnel counts activity in the window, not a nested cohort.** Leads are anchored on first
+  contact and bookings on their own `created_at`, so a lead who first wrote before the window and
+  booked inside it makes `agendamentos ÷ leads` exceed 100%. Real and rare; the screen shows the
+  true figure and clamps only the bar. A strictly nested cohort (count only bookings made by leads
+  who arrived in the window) would fix the ratio at the cost of under-reporting the month's actual
+  bookings, which is the worse lie for the person reading it.
 - **Polling, not push.** The inbox refreshes on a 5s timer (Module 5, decision 5B), so a new
   message takes up to 5s to appear and every open tab costs two requests per cycle. Websockets
   or SSE would be the upgrade, at the cost of the "no build pipeline" simplicity.
