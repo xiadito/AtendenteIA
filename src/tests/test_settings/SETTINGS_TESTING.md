@@ -8,7 +8,8 @@ a manual UPDATE"*).
 A tela tem **duas seções na mesma página**, com **formulários independentes**:
 
 - **IA** — os cinco campos de `ai_configs`, a camada customizável do prompt.
-- **Conta** — o `owner_phone` (editável) e o status do Google Calendar (só leitura).
+- **Conta** — o `owner_phone` (editável), o `whatsapp_number` da academia (editável desde o
+  Módulo S3d, em formulário próprio) e o status do Google Calendar (só leitura).
 
 ---
 
@@ -16,9 +17,11 @@ A tela tem **duas seções na mesma página**, com **formulários independentes*
 
 Diferente das outras suítes, que criam linhas próprias sob o prefixo delas, esta precisa
 sobrescrever **a linha real** de `ai_configs` e o **`owner_phone` real** de `owners` — as
-duas tabelas têm uma linha por tenant, e o piloto é o único tenant.
+duas tabelas têm uma linha por tenant, e o piloto é o único tenant. Desde o Módulo S3d o
+**`whatsapp_number` real** entra na mesma lista, e é o mais caro dos três de se perder: ele
+roteia o WhatsApp da academia nas duas direções.
 
-As duas são salvas em `/tmp/corujai_settings_backup.json` antes da primeira escrita e
+As três são salvas em `/tmp/corujai_settings_backup.json` antes da primeira escrita e
 restauradas no teardown, **inclusive o `updated_at`**, para que uma rodada de teste não
 deixe rastro nenhum. Se uma rodada morrer no meio, a próxima restaura sozinha na largada.
 
@@ -31,7 +34,7 @@ Se for mexer à mão pelo CLI, rode `backup` antes e `restore` depois.
 Tudo a partir de `src/`, com o virtualenv ativo:
 
 ```bash
-# Suíte automatizada (12 testes, determinística, sem rede)
+# Suíte automatizada (17 testes, determinística, sem rede)
 python tests/test_settings/test_settings_suite.py
 
 # Mantém tudo como ficou, para inspecionar no DBeaver
@@ -45,7 +48,7 @@ A suíte não usa LLM, WhatsApp nem Google Calendar: a tela só lê e escreve du
 Postgres. Ela sobe a app com `create_app()` e dirige tudo pelo `test_client` do Flask,
 logado como o dono estaria.
 
-Sai com código `0` só se os 12 passarem.
+Sai com código `0` só se os 17 passarem.
 
 ---
 
@@ -64,7 +67,8 @@ Sai com código `0` só se os 12 passarem.
 | 7 | Telefone inválido recusado | Vazio, curto e não-numérico não gravam |
 | 8 | Campo vazio da IA recusado | Banco intacto **e** o texto digitado volta na tela |
 | 9 | GET mostra o estado atual | As duas seções, cada uma com seu próprio `POST` |
-| 10 | Autenticação | As três rotas redirecionam para o login sem sessão |
+| 10 | Autenticação | As quatro rotas redirecionam para o login sem sessão |
+| 11-15 | **Número da academia (S3d)** | Ver a seção do S3d, no fim deste arquivo |
 
 ---
 
@@ -167,8 +171,63 @@ SELECT id, tenant_id, owner_phone FROM owners WHERE owner_phone = '5521999999999
   (ver `CLAUDE.md`), e nada aqui precisava de schema novo.
 - **Não adiciona `UNIQUE` em `owner_phone`.** A guarda (b) evita o pior caso na aplicação,
   mas a constraint no banco é do S3, junto da migration que cria `whatsapp_number`.
-- **Não mostra `whatsapp_number`.** Essa coluna só nasce no S3.
+- ~~**Não mostra `whatsapp_number`.** Essa coluna só nasce no S3.~~ **Deixou de valer no
+  Módulo S3d**, que pôs o número da academia na seção "Conta" — ver a seção abaixo.
 - **Não guarda histórico de versões** da config: a última gravação do dono vale.
 - **Não reimplementa o OAuth do Google.** A seção Conta só exibe o status e linka para a
   tela de integrações do Módulo 1.
 - **Não tem controle de papéis.** Quem está logado no painel edita as duas seções.
+
+---
+
+## Módulo S3d — o número da academia (cenários 11-15)
+
+A seção "Conta" ganhou um **segundo** formulário. Não confunda os dois campos: eles são as duas
+chaves de roteamento do projeto e respondem perguntas opostas sobre a **mesma** mensagem.
+
+| Campo | Coluna | Papel |
+|---|---|---|
+| "Seu WhatsApp" | `owners.owner_phone` | O celular **pessoal do dono** — o `From` que diz "quem escreveu foi o dono respondendo 1/2, não um lead" |
+| "WhatsApp da academia" | `owners.whatsapp_number` | A **linha da academia** — o `To` que diz para qual academia o lead escreveu e, desde o S3d, o `From` de tudo que a IA envia |
+
+**São dois POSTs separados de propósito.** Um formulário só faria o dono que corrige o próprio
+celular reescrever a linha da academia junto — e essa segunda gravação derrubaria o atendimento
+inteiro sem nenhuma mensagem de erro. É o cenário 15.
+
+### Cenários
+
+| # | O que prova |
+|---|---|
+| 11 | Salvar grava em dígitos puros **e** `resolve_sender_number()` passa a devolver esse número como `From` |
+| 12 | Campo vazio limpa a coluna e o piloto volta ao `TWILIO_SANDBOX_NUMBER` |
+| 13 | Recusa o número que já é o `owner_phone` de algum dono |
+| 14 | Recusa o número de um lead com conversa aberta, e formatos inválidos, sem gravar |
+| 15 | Salvar um dos dois números não toca no outro |
+
+### Como conferir à mão
+
+```sql
+-- As duas chaves lado a lado. Precisam ser NÚMEROS DIFERENTES.
+SELECT tenant_id, whatsapp_number, owner_phone FROM owners ORDER BY tenant_id;
+```
+
+Na tela: salve um número, recarregue e confira que ele voltou preenchido; depois tente salvar
+nele o telefone do dono e confira, pelo `SELECT` acima, que **nada** mudou.
+
+### ⚠️ O backup passou a cobrir `whatsapp_number`
+
+Esta suíte escreve nas linhas **reais** do piloto, e agora também nessa coluna. O snapshot em
+`/tmp/corujai_settings_backup.json` inclui as três (`ai_configs`, `owner_phone`,
+`whatsapp_number`) e o teardown restaura as três. **Uma rodada que não restaurasse a última
+apontaria todo o canal de WhatsApp do piloto para `5526088888888`** — e nada na tela nem no log
+denunciaria isso, porque um número gravado é exatamente o estado normal de uma academia em
+produção. Um cenário novo que escreva em mais uma coluna de `owners` precisa entrar no snapshot
+no mesmo commit.
+
+### O que o S3d **não** fez aqui
+
+- **Não criou migration.** `whatsapp_number` existe desde a 009.
+- **Não valida o Sender no Twilio.** A tela grava o número; se o Sender não estiver aprovado, o
+  envio falha do lado do Twilio. O texto de ajuda do campo diz isso, e é por isso que o passo do
+  `/dashboard/onboarding` continua avisando que a liberação é da nossa equipe.
+- **Não aceita mais de um número por academia.** A coluna é uma só, com `UNIQUE`.

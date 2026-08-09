@@ -52,7 +52,10 @@ import bot.confirmations as confirmations  # noqa: E402
 import bot.messages as messages  # noqa: E402
 import bot.owner_notifications as owner_notifications  # noqa: E402
 import bot.session as session_store  # noqa: E402
+import integrations.store as store  # noqa: E402
 import jobs.drain_notifications as drain  # noqa: E402
+import whatsapp.whatsapp_service as whatsapp_service  # noqa: E402
+from config import Config  # noqa: E402
 from database.db import get_connection  # noqa: E402
 
 # Fixture tenants. Hyphens, because these ids come out of the real slug generator.
@@ -898,7 +901,104 @@ class TenantIsolationSuite:
         expect(not found, "ainda há costura aberta: " + ", ".join(found))
         return "grep de `# S3b:` limpo em todo o código de produção"
 
-    def test_17_teardown_leaves_nothing(self) -> str:
+    # -- Módulo S3d: o vazamento na SAÍDA ------------------------------------
+
+    def test_17_each_gym_sends_from_its_own_number(self) -> str:
+        """Cada academia responde pela própria linha, nunca pela da outra.
+
+        O VAZAMENTO QUE O S3b NÃO FECHOU. O S3a fez o "To" que ENTRA decidir a
+        academia; até o S3d toda resposta que SAÍA usava um único número global do
+        .env. O resultado seria uma academia reconhecida por um número e
+        respondendo por outro — o lead responderia para a linha errada e a
+        conversa dele cairia na academia errada. É a mesma família dos dois
+        vazamentos que o S3b achou (o Calendar do piloto e o callback do OAuth):
+        código que sabia para qual academia trabalhava e lia a linha de outra.
+        """
+        number_a = f"{SENDER_PREFIX}770001"
+        number_b = f"{SENDER_PREFIX}770002"
+        expect(store.update_whatsapp_number(number_a, tenant_id=self.tenant_a),
+               "não consegui gravar o número da Alfa")
+        expect(store.update_whatsapp_number(number_b, tenant_id=self.tenant_b),
+               "não consegui gravar o número da Beta")
+
+        try:
+            expect_equal(whatsapp_service.resolve_sender_number(self.tenant_a),
+                         f"whatsapp:+{number_a}", "remetente da Alfa")
+            expect_equal(whatsapp_service.resolve_sender_number(self.tenant_b),
+                         f"whatsapp:+{number_b}", "remetente da Beta")
+            expect(
+                whatsapp_service.resolve_sender_number(self.tenant_a)
+                != whatsapp_service.resolve_sender_number(self.tenant_b),
+                "as duas academias estão saindo pelo mesmo número",
+            )
+        finally:
+            store.update_whatsapp_number(None, tenant_id=self.tenant_a)
+            store.update_whatsapp_number(None, tenant_id=self.tenant_b)
+
+        return "cada academia resolve o próprio 'From'"
+
+    def test_18_a_gym_without_a_number_refuses_to_send(self) -> str:
+        """Sem número, uma academia qualquer RECUSA o envio — só o piloto cai no sandbox.
+
+        A assimetria com a ENTRADA é deliberada e é a decisão central do módulo.
+        resolve_tenant_by_whatsapp_number() nunca bloqueia uma mensagem, porque
+        perder um lead que chegou é pior do que atendê-lo como se fosse do piloto.
+        Aqui o custo se inverte: uma mensagem enviada pela linha errada não tem
+        volta, e o lead passa a responder para outra academia. O piloto é a única
+        exceção, e por um motivo concreto — o Sandbox do Twilio dá o mesmo número
+        de entrada para todo mundo, então nenhuma academia pode reivindicá-lo e o
+        whatsapp_number do 'default' é legitimamente NULL.
+        """
+        expect(store.get_whatsapp_number(self.tenant_a) is None,
+               "pré-condição: a Alfa não deveria ter número neste ponto")
+
+        raised = False
+        try:
+            whatsapp_service.resolve_sender_number(self.tenant_a)
+        except whatsapp_service.SenderNotConfiguredError:
+            raised = True
+        expect(raised, "uma academia sem número deveria recusar o envio, não cair no sandbox")
+
+        # O piloto, com a coluna vazia, continua exatamente como antes do S3d.
+        if store.get_whatsapp_number(store.DEFAULT_TENANT_ID) is None:
+            expect_equal(
+                whatsapp_service.resolve_sender_number(store.DEFAULT_TENANT_ID),
+                Config.TWILIO_SANDBOX_NUMBER,
+                "o piloto sem número deveria sair pelo remetente do sandbox",
+            )
+        else:
+            raise SkipTest("o tenant 'default' já tem whatsapp_number; o caso sandbox acabou")
+
+        return "academia sem número recusa; o piloto ainda cai no sandbox"
+
+    def test_19_the_reply_to_a_lead_uses_the_leads_gym(self) -> str:
+        """A resposta ao lead sai pela academia DELE, não pela do piloto.
+
+        O teste que amarra o resolvedor ao caminho real: confirma uma reserva da
+        Beta e confere o tenant que chegou ao send_message. Um call site que
+        esqueça de passar o tenant não levanta erro nenhum — ele sai em silêncio
+        pela linha do piloto —, então a única forma de flagrar é olhar o
+        argumento.
+        """
+        booking_id = self._new_booking(self.tenant_b, "Lead da Beta")
+        seen: list[str] = []
+
+        def capture(to: str, text: str, tenant_id: str = "default") -> str:
+            seen.append(tenant_id)
+            return "SM-stub"
+
+        with patched(confirmations.whatsapp_service, "send_message", capture):
+            result = confirmations.confirm_or_cancel_booking(
+                booking_id, "confirmed", tenant_id=self.tenant_b
+            )
+
+        expect_equal(result["result"], "applied", "a reserva deveria ter sido confirmada")
+        expect_equal(seen, [self.tenant_b],
+                     "o aviso ao lead saiu pelo tenant errado (ou não passou o tenant)")
+
+        return "o aviso da reserva sai pela academia dona da reserva"
+
+    def test_20_teardown_leaves_nothing(self) -> str:
         """A limpeza remove os dois tenants e tudo o que pende deles."""
         if self.keep:
             raise SkipTest("--keep pedido: as fixtures ficam no banco de propósito")
@@ -1055,8 +1155,14 @@ def main() -> None:
          suite.test_15_settings_screen_is_per_tenant),
         ("16", "Nenhum marcador `# S3b:` sobrou",
          suite.test_16_no_s3b_marker_is_left),
-        ("17", "A limpeza não deixa conta nem tenant pendurado",
-         suite.test_17_teardown_leaves_nothing),
+        ("17", "Cada academia envia pelo próprio número (S3d)",
+         suite.test_17_each_gym_sends_from_its_own_number),
+        ("18", "Academia sem número recusa o envio; só o piloto cai no sandbox (S3d)",
+         suite.test_18_a_gym_without_a_number_refuses_to_send),
+        ("19", "O aviso ao lead sai pela academia dona da reserva (S3d)",
+         suite.test_19_the_reply_to_a_lead_uses_the_leads_gym),
+        ("20", "A limpeza não deixa conta nem tenant pendurado",
+         suite.test_20_teardown_leaves_nothing),
     ]
     for step, title, test in tests:
         report.run(step, title, test)

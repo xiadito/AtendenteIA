@@ -197,7 +197,10 @@ devolve a sua linha junto com a de todo mundo. A asserção que importa é sempr
 | 14 | Nem digitando a URL da outra academia | 200 em vez de 404 no `/dashboard/inbox/<sender>` alheio |
 | 15 | A tela de configurações é por tenant | Salvar na Beta sobrescrever a IA da Alfa |
 | 16 | Nenhum marcador `# S3b:` sobrou | Costura aberta |
-| 17 | A limpeza não deixa conta nem tenant pendurado | Fixture no banco depois do teardown |
+| 17 | **(S3d)** Cada academia envia pelo próprio número | As duas resolvendo o mesmo `From` |
+| 18 | **(S3d)** Academia sem número recusa; só o piloto cai no sandbox | Uma academia qualquer respondendo pela linha do sandbox |
+| 19 | **(S3d)** O aviso ao lead sai pela academia dona da reserva | O `send_message` recebendo o tenant errado — ou nenhum |
+| 20 | A limpeza não deixa conta nem tenant pendurado | Fixture no banco depois do teardown |
 
 ### Convenções desta suíte
 
@@ -295,3 +298,49 @@ de `get_cached_slots` eram `lambda days_ahead=14: [...]` e viraram
   `signup_attempts` (a fila de throttle é do sistema, como a de notificações).
 - **Não pagina nem limita nenhuma tela.** `list_conversations()` e `list_bookings_for_review()`
   continuam sem `LIMIT` — agora por academia, o que adia o problema sem resolvê-lo.
+- ~~**Não isola o que SAI.**~~ Era a última meia-verdade do S3b, e o **Módulo S3d** a resolveu —
+  ver os cenários 17-19 abaixo.
+
+---
+
+## 8. Módulo S3d — o vazamento na SAÍDA
+
+O S3b fechou toda leitura. O que ele não tocou foi o **envio**: `send_message()` usava um único
+`Config.TWILIO_SANDBOX_NUMBER` para todas as academias. Não é um vazamento de leitura, mas é o
+mesmo estrago: a academia era reconhecida pelo número dela na ENTRADA e respondia por outro na
+SAÍDA, então o lead responderia para a linha errada e a próxima mensagem dele cairia noutro
+tenant. É a mesma família dos dois vazamentos que o próprio S3b encontrou — o Google Calendar do
+piloto e o callback do OAuth: código que sabia para qual academia trabalhava e usava a linha de
+outra.
+
+`whatsapp_service.resolve_sender_number(tenant_id)` lê `owners.whatsapp_number` e devolve o
+`from_`. **Sem número, só o tenant `'default'` cai no sandbox; qualquer outro levanta
+`SenderNotConfiguredError`.** A assimetria com a entrada é a decisão do módulo:
+`resolve_tenant_by_whatsapp_number()` nunca bloqueia uma mensagem — perder um lead que já
+escreveu é pior do que atendê-lo como do piloto —, enquanto na saída uma mensagem despachada pela
+linha errada não tem volta.
+
+### Como conferir à mão
+
+```sql
+-- Dê um número a cada academia de teste e confira que são diferentes.
+SELECT tenant_id, whatsapp_number FROM owners WHERE tenant_id LIKE 'suite-s3b-%';
+```
+
+```python
+# De src/, com o venv ativo:
+import whatsapp.whatsapp_service as w
+w.resolve_sender_number("suite-s3b-alfa")   # whatsapp:+<numero da alfa>
+w.resolve_sender_number("suite-s3b-beta")   # whatsapp:+<numero da beta>
+w.resolve_sender_number("default")          # o TWILIO_SANDBOX_NUMBER do .env
+```
+
+### A armadilha que o cenário 19 cobre
+
+Esquecer o `tenant_id` num call site de `send_message` **não levanta erro nenhum** — o default
+manda pela linha do piloto, em silêncio. É a mesma armadilha #5 do S3b (parametrizar a função e
+esquecer de passar o valor na rota), agora no envio. Por isso o cenário 19 não olha o texto: ele
+olha o **argumento** que chegou ao `send_message`.
+
+E o cenário 12 ganhou a mesma verificação para o cron: além do rótulo da turma, ele agora confere
+que cada linha da fila foi despachada com o tenant dela.
