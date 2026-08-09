@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Corujai — Métricas</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/theme.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/metrics.css') }}">
+</head>
+{# Sem HTMX aqui, ao contrário do inbox e dos agendamentos: nada nesta página se
+   atualiza sozinho. Trocar o período é um link GET comum, que recarrega a tela e
+   deixa a URL compartilhável — e, por ser GET, não encosta no CSRF do S3c. #}
+<body>
+    <button class="theme-toggle" id="themeBtn" onclick="toggleTheme()">🌙 Escuro</button>
+    <div class="card">
+        <a class="back-link" href="{{ url_for('dashboard.menu') }}">← Menu</a>
+        <h1>Métricas</h1>
+        <p class="subtitle">
+            O funil da sua academia: quantas pessoas chegaram e o que aconteceu
+            com elas.
+        </p>
+
+        <nav class="period-picker" aria-label="Período">
+            {% for days in periods %}
+                <a class="period-option {{ 'is-active' if days == funnel.period_days }}"
+                   href="{{ url_for('dashboard.metrics_dashboard', period=days) }}">
+                    {{ days }} dias
+                </a>
+            {% endfor %}
+        </nav>
+
+        <p class="period-range">
+            De {{ funnel.period_start.strftime('%d/%m/%Y') }} até hoje.
+        </p>
+
+        {% if not funnel.has_data %}
+            <p class="empty">
+                Sem dados no período. Assim que a IA atender o primeiro lead
+                nesta janela, os números aparecem aqui.
+            </p>
+        {% else %}
+            {#
+              Cada barra é proporcional ao MAIOR dos quatro números, não a "Leads".
+              Normalmente dá no mesmo, porque leads é o maior — mas os dois
+              conjuntos não são aninhados: um lead que falou com a academia antes
+              da janela pode agendar dentro dela. Usar o máximo mantém o desenho
+              honesto nesse caso, em vez de estourar a barra para fora do card.
+            #}
+            {% set chart_max = [funnel.leads, funnel.booked, funnel.confirmed, funnel.cancelled] | max or 1 %}
+            {% set rows = [
+                {"label": "Leads",
+                 "value": funnel.leads,
+                 "hint": "Pessoas cujo primeiro contato aconteceu no período",
+                 "rate": none, "of": none},
+                {"label": "Agendamentos",
+                 "value": funnel.booked,
+                 "hint": "Aulas experimentais marcadas pela IA no período",
+                 "rate": funnel.lead_to_booking_rate, "of": "dos leads"},
+                {"label": "Confirmados",
+                 "value": funnel.confirmed,
+                 "hint": "Você respondeu que a aula vai acontecer",
+                 "rate": funnel.booking_to_confirmed_rate, "of": "dos agendamentos"},
+                {"label": "Cancelados",
+                 "value": funnel.cancelled,
+                 "hint": "Desmarcados por você ou pelo lead",
+                 "rate": funnel.booking_to_cancelled_rate, "of": "dos agendamentos"}
+            ] %}
+
+            <ol class="funnel">
+                {% for row in rows %}
+                    <li class="funnel-row">
+                        <div class="funnel-head">
+                            <span class="funnel-label">{{ row.label }}</span>
+                            <span class="funnel-value">{{ row.value }}</span>
+                        </div>
+                        <div class="funnel-track">
+                            <div class="funnel-bar {{ 'funnel-bar-cancelled' if row.label == 'Cancelados' }}"
+                                 style="width: {{ (row.value * 100 / chart_max) | round(1) }}%"></div>
+                        </div>
+                        <p class="funnel-hint">
+                            {{ row.hint }}{% if row.of %} —
+                                {% if row.rate is none %}
+                                    <strong class="funnel-rate">—</strong>
+                                {% else %}
+                                    <strong class="funnel-rate">{{ row.rate }}%</strong> {{ row.of }}
+                                {% endif %}
+                            {% endif %}
+                        </p>
+                    </li>
+                {% endfor %}
+            </ol>
+
+            {% if funnel.pending %}
+                <p class="pending-note">
+                    {{ funnel.pending }} agendamento{{ '' if funnel.pending == 1 else 's' }}
+                    ainda aguarda{{ '' if funnel.pending == 1 else 'm' }} sua decisão.
+                    <a href="{{ url_for('dashboard.bookings_review') }}">Ver agendamentos</a>
+                </p>
+            {% endif %}
+        {% endif %}
+
+        {#
+          ESTA NOTA É PARTE DO MÓDULO, NÃO ENFEITE (problema P1). "Confirmados" é
+          uma decisão que o dono tomou dias antes da aula, e é fácil ler o número
+          como se fosse presença. O Corujai não registra comparecimento — não há
+          estado nem momento de captura para isso — então a tela diz isso em vez
+          de deixar o dono concluir sozinho o que o número não quer dizer.
+        #}
+        <p class="footnote">
+            <strong>Confirmados</strong> quer dizer que você respondeu que a aula
+            vai acontecer. O Corujai ainda não registra se a pessoa compareceu à
+            aula, então nenhum número desta tela mede presença.
+        </p>
+    </div>
+    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+</body>
+</html>

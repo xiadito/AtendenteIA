@@ -1,0 +1,180 @@
+/* Pareado com templates/metrics.html. Um stylesheet por template, como o resto
+   do painel.
+
+   O funil é desenhado com <div> e width em %, sem biblioteca de gráfico. Quatro
+   barras horizontais são justamente o caso em que uma dependência de terceiro
+   custa mais do que entrega: assim o gráfico aparece com o HTML, funciona sem
+   JavaScript, e herda o modo escuro do theme.css sem uma linha de configuração.
+
+   Nenhuma cor literal fora do rgba da sombra — tudo sai das variáveis do
+   theme.css, que é o que faz o tema claro/escuro funcionar de graça. */
+
+body {
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    padding: 2.5rem 1.5rem;
+    box-sizing: border-box;
+}
+
+.card {
+    background: var(--surface);
+    padding: 2rem;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    width: 100%;
+    max-width: 720px;
+}
+
+.back-link {
+    display: inline-block;
+    margin-bottom: 1rem;
+    font-size: 0.85rem;
+    color: #888;
+    text-decoration: none;
+}
+
+.back-link:hover { color: var(--text); }
+
+h1 {
+    font-size: 1.4rem;
+    color: var(--text);
+    margin: 0 0 0.25rem;
+}
+
+.subtitle {
+    color: var(--text);
+    opacity: 0.65;
+    font-size: 0.88rem;
+    margin: 0 0 1.5rem;
+}
+
+/* Seletor de período: três links GET, não um formulário. */
+.period-picker {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.6rem;
+}
+
+.period-option {
+    padding: 0.35rem 0.9rem;
+    border: 1px solid var(--input-border);
+    border-radius: 20px;
+    font-size: 0.85rem;
+    color: var(--text);
+    text-decoration: none;
+    transition: border-color 0.15s, background-color 0.15s;
+}
+
+.period-option:hover { border-color: var(--brand); }
+
+.period-option.is-active {
+    background: var(--brand);
+    border-color: var(--brand);
+    color: #fff;
+}
+
+.period-range {
+    font-size: 0.8rem;
+    color: var(--text);
+    opacity: 0.6;
+    margin: 0 0 1.75rem;
+}
+
+.empty {
+    border: 1px dashed var(--input-border);
+    border-radius: 8px;
+    padding: 2rem 1.5rem;
+    text-align: center;
+    font-size: 0.9rem;
+    color: var(--text);
+    opacity: 0.7;
+    margin: 0 0 1.5rem;
+}
+
+/* O funil. <ol> porque a ordem das etapas é o conteúdo, não a apresentação. */
+.funnel {
+    list-style: none;
+    margin: 0 0 1.5rem;
+    padding: 0;
+}
+
+.funnel-row + .funnel-row { margin-top: 1.4rem; }
+
+.funnel-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 1rem;
+    margin-bottom: 0.4rem;
+}
+
+.funnel-label {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text);
+}
+
+.funnel-value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+}
+
+.funnel-track {
+    background: var(--bg);
+    border: 1px solid var(--input-border);
+    border-radius: 4px;
+    height: 14px;
+    overflow: hidden;
+}
+
+.funnel-bar {
+    background: var(--brand);
+    height: 100%;
+    border-radius: 3px 0 0 3px;
+}
+
+/* Cancelados não é uma etapa que se comemora: fica na cor do texto, apagado, em
+   vez de na cor da marca. Sem vermelho de alerta — um cancelamento é um fato
+   normal do funil, não um erro do sistema. */
+.funnel-bar-cancelled {
+    background: var(--text);
+    opacity: 0.35;
+}
+
+.funnel-hint {
+    font-size: 0.8rem;
+    color: var(--text);
+    opacity: 0.65;
+    margin: 0.4rem 0 0;
+}
+
+.funnel-rate {
+    opacity: 1;
+    color: var(--brand);
+}
+
+.pending-note {
+    font-size: 0.85rem;
+    color: var(--text);
+    opacity: 0.8;
+    border-left: 3px solid var(--brand);
+    padding-left: 0.8rem;
+    margin: 0 0 1.5rem;
+}
+
+.pending-note a { color: var(--brand); }
+
+/* A nota do P1. Discreta, mas nunca removível — ver o comentário no template. */
+.footnote {
+    border-top: 1px solid var(--input-border);
+    padding-top: 1rem;
+    margin: 0;
+    font-size: 0.78rem;
+    line-height: 1.5;
+    color: var(--text);
+    opacity: 0.6;
+}

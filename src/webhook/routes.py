@@ -16,6 +16,7 @@ import bot.bookings as bookings
 import bot.class_types as class_types
 import bot.confirmations as confirmations
 import bot.messages as messages
+import bot.metrics as metrics
 import bot.owner_notifications as owner_notifications
 import bot.scheduling as scheduling
 import bot.session as session_store
@@ -469,12 +470,57 @@ def onboarding():
 @dashboard_bp.route("/menu")
 @require_auth
 def menu():
-    """Hub de navegação pós-login: integrações e futuras features."""
+    """Hub de navegação pós-login: integrações e futuras features.
+
+    Desde o Módulo S4 o menu também abre com três números do funil da própria
+    academia (decisão 19C). É a primeira coisa que o dono vê ao entrar, e existe
+    para responder "o Corujai está me dando resultado?" antes de ele precisar
+    clicar em qualquer lugar.
+    """
     # O tile "Primeiros passos" só aparece enquanto houver pendência, para o
     # painel de uma academia já configurada não carregar um atalho morto.
     return render_template(
         "menu.html",
         onboarding_pending=onboarding_steps.pending_count(current_user.tenant_id),
+        summary=metrics.get_funnel_summary(current_user.tenant_id),
+    )
+
+
+#
+# FUNNEL METRICS (Module S4)
+#
+# The screen that shows the owner what the product is producing: how many leads
+# arrived, how many became a booking, how many were confirmed, how many fell
+# through. Read-only — see bot/metrics.py, which owns every definition.
+#
+# IT DOES NOT, AND MUST NOT, SHOW ATTENDANCE (problem P1). `confirmed` means the
+# owner said the class will happen, not that the lead turned up; no column in
+# this schema records the latter. Any label here about "comparecimento" or
+# "presença" would be a number invented from one that means something else.
+#
+
+
+@dashboard_bp.route("/metrics")
+@require_auth
+def metrics_dashboard():
+    """Funil da academia no período escolhido (Módulo S4).
+
+    NÃO se chame `metrics`: o topo deste arquivo faz `import bot.metrics as
+    metrics`, e uma view com esse nome sombrearia o módulo para TODAS as rotas
+    daqui. Mesma armadilha que deu o nome `bookings_review` à tela de
+    agendamentos. O endpoint, portanto, é `dashboard.metrics_dashboard`.
+
+    O período vem por query string (`?period=7|30|90`), não por formulário: GET
+    não mexe em CSRF, e a URL fica compartilhável. Valor inválido cai em 30 —
+    `metrics.parse_period()` é total de propósito, para um erro de digitação na
+    URL não derrubar a tela.
+    """
+    days: int = metrics.parse_period(request.args.get("period"))
+
+    return render_template(
+        "metrics.html",
+        funnel=metrics.get_funnel(current_user.tenant_id, days=days),
+        periods=metrics.ALLOWED_PERIODS,
     )
 
 
