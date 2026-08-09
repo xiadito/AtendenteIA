@@ -22,7 +22,7 @@ body {
     display: inline-block;
     margin-bottom: 1rem;
     font-size: 0.85rem;
-    color: #888;
+    color: var(--muted);
     text-decoration: none;
 }
 
@@ -69,7 +69,7 @@ h1 {
 }
 
 .conversation-row a:hover {
-    border-color: var(--brand);
+    border-color: var(--brand-accent);
     transform: translateY(-1px);
 }
 
@@ -128,4 +128,4 @@ h1 {
 
 .tag-paused { background: #f8d7da; color: #721c24; }  /* vermelho */
 .tag-unread { background: #d4edda; color: #155724; }  /* verde    */
-.tag-stage  { background: #f0f0f0; color: #666666; }  /* cinza    */
+.tag-stage  { background: var(--neutral-bg); color: var(--neutral-text); }  /* cinza    */

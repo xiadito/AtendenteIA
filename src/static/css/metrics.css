@@ -30,7 +30,7 @@ body {
     display: inline-block;
     margin-bottom: 1rem;
     font-size: 0.85rem;
-    color: #888;
+    color: var(--muted);
     text-decoration: none;
 }
 
@@ -67,12 +67,12 @@ h1 {
     transition: border-color 0.15s, background-color 0.15s;
 }
 
-.period-option:hover { border-color: var(--brand); }
+.period-option:hover { border-color: var(--brand-accent); }
 
 .period-option.is-active {
     background: var(--brand);
-    border-color: var(--brand);
-    color: #fff;
+    border-color: var(--brand-accent);
+    color: var(--on-brand);
 }
 
 .period-range {
@@ -131,8 +131,11 @@ h1 {
     overflow: hidden;
 }
 
+/* Barra na cor de ACENTO, não na de preenchimento: ela é lida contra o trilho
+   (--bg), e o roxo principal sobre o neutro escuro dá 2.2:1 — no tema escuro a
+   barra praticamente sumiria. O acento vira roxo claro lá e resolve. */
 .funnel-bar {
-    background: var(--brand);
+    background: var(--brand-accent);
     height: 100%;
     border-radius: 3px 0 0 3px;
 }
@@ -154,19 +157,19 @@ h1 {
 
 .funnel-rate {
     opacity: 1;
-    color: var(--brand);
+    color: var(--brand-accent);
 }
 
 .pending-note {
     font-size: 0.85rem;
     color: var(--text);
     opacity: 0.8;
-    border-left: 3px solid var(--brand);
+    border-left: 3px solid var(--brand-accent);
     padding-left: 0.8rem;
     margin: 0 0 1.5rem;
 }
 
-.pending-note a { color: var(--brand); }
+.pending-note a { color: var(--brand-accent); }
 
 /* A nota do P1. Discreta, mas nunca removível — ver o comentário no template. */
 .footnote {

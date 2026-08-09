@@ -22,7 +22,7 @@ body {
     display: inline-block;
     margin-bottom: 1rem;
     font-size: 0.85rem;
-    color: #888;
+    color: var(--muted);
     text-decoration: none;
 }
 
@@ -51,8 +51,8 @@ h1 {
 
 .btn-resume {
     background: none;
-    border: 1px solid var(--brand);
-    color: var(--brand);
+    border: 1px solid var(--brand-accent);
+    color: var(--brand-accent);
     padding: 0.45rem 0.9rem;
     border-radius: 4px;
     font-size: 0.88rem;
@@ -61,7 +61,7 @@ h1 {
     white-space: nowrap;
 }
 
-.btn-resume:hover { background: var(--brand); color: #ffffff; }
+.btn-resume:hover { background: var(--brand); color: var(--on-brand); }
 
 .takeover-banner,
 .ai-banner {
@@ -72,7 +72,7 @@ h1 {
 }
 
 .takeover-banner { background: #fff3cd; color: #856404; }
-.ai-banner       { background: #f0f0f0; color: #666666; }
+.ai-banner       { background: var(--neutral-bg); color: var(--neutral-text); }
 
 .send-error {
     margin-bottom: 1rem;
@@ -118,8 +118,8 @@ h1 {
 }
 
 .message-lead     .message-bubble { border-bottom-left-radius: 2px; }
-.message-ai       .message-bubble { border-bottom-right-radius: 2px; background: rgba(45, 122, 45, 0.10); }
-.message-operator .message-bubble { border-bottom-right-radius: 2px; background: rgba(45, 122, 45, 0.22); }
+.message-ai       .message-bubble { border-bottom-right-radius: 2px; background: var(--bubble-ai); }
+.message-operator .message-bubble { border-bottom-right-radius: 2px; background: var(--bubble-operator); }
 
 .message-author {
     display: block;
@@ -165,7 +165,7 @@ h1 {
 .reply-form button {
     background: var(--brand);
     border: none;
-    color: #ffffff;
+    color: var(--on-brand);
     padding: 0.6rem 1.2rem;
     border-radius: 6px;
     font-size: 0.9rem;

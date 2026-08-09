@@ -58,7 +58,7 @@ input[type="password"] {
 
 input:focus {
     outline: none;
-    border-color: var(--brand);
+    border-color: var(--brand-accent);
 }
 
 .field-hint {
@@ -79,7 +79,7 @@ button[type="submit"] {
     margin-top: 1.2rem;
     padding: 0.7rem;
     background-color: var(--brand);
-    color: white;
+    color: var(--on-brand);
     border: none;
     border-radius: 4px;
     font-size: 1rem;
@@ -103,7 +103,7 @@ button[type="submit"]:hover { background-color: var(--brand-dark); }
 }
 
 .alt-action a {
-    color: var(--brand);
+    color: var(--brand-accent);
     text-decoration: none;
 }
 

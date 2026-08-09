@@ -68,8 +68,9 @@ h1 {
     opacity: 0.45;
 }
 
-/* Verde nos dois temas: é o único sinal da página que precisa ser lido de
-   relance, e --brand escurece demais no tema claro para esse tamanho. */
+/* Verde nos dois temas, e não roxo: "feito" é um sinal semântico, não a marca —
+   pintá-lo de roxo faria o passo concluído competir com o botão do passo que
+   ainda falta, que é o único que a página quer que seja clicado. */
 .step-done .step-mark {
     color: #2e9e4f;
     opacity: 1;
@@ -104,9 +105,9 @@ h1 {
     flex: 0 0 auto;
     align-self: center;
     padding: 0.4rem 0.9rem;
-    border: 1px solid var(--brand);
+    border: 1px solid var(--brand-accent);
     border-radius: 4px;
-    color: var(--brand);
+    color: var(--brand-accent);
     font-size: 0.85rem;
     text-decoration: none;
     white-space: nowrap;
@@ -114,7 +115,7 @@ h1 {
 
 .step-action:hover {
     background: var(--brand);
-    color: white;
+    color: var(--on-brand);
 }
 
 /* O passo que o dono não resolve sozinho. Sem botão, e dito com todas as

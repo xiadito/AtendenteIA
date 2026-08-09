@@ -1,17 +1,70 @@
+/* Paleta da marca e variáveis globais. Toda cor de marca do painel sai daqui —
+   nenhum stylesheet de tela deve trazer um literal roxo.
+
+   As cinco cores da empresa:
+       Roxo principal  #6D28D9
+       Roxo profundo   #4C1D95
+       Roxo claro      #A78BFA
+       Neutro escuro   #0F172A
+       Fundo claro     #F5F3FF
+
+   Os tons DERIVADOS abaixo (bordas, cinzas, superfície escura) não vieram da
+   lista: são da mesma família das cinco, escolhidos para o painel ter borda,
+   texto apagado e modo escuro sem inventar uma segunda paleta. Estão marcados
+   um a um.
+
+   As cores SEMÂNTICAS — verde de sucesso, amarelo de aviso, vermelho de erro —
+   continuam nos stylesheets de cada tela e continuam as mesmas: elas dizem o
+   que aconteceu, não de quem é o produto, e trocá-las por roxo apagaria o
+   sinal. */
+
 :root {
-    --bg: #f5f5f5;
+    /* Superfícies e texto */
+    --bg: #F5F3FF;             /* Fundo claro */
     --surface: #ffffff;
-    --text: #333333;
-    --input-border: #cccccc;
-    --brand: #2d7a2d;
-    --brand-dark: #235e23;
+    --text: #0F172A;           /* Neutro escuro */
+    --input-border: #DDD6FE;   /* derivado: roxo claro rebaixado, para borda */
+
+    /* Marca */
+    --brand: #6D28D9;          /* Roxo principal — preenchimento sólido */
+    --brand-dark: #4C1D95;     /* Roxo profundo — hover do preenchimento */
+    --brand-light: #A78BFA;    /* Roxo claro */
+    --on-brand: #ffffff;       /* texto sobre --brand: 7.1:1, passa AA */
+
+    /* A marca quando é TEXTO ou BORDA sobre a superfície, e não fundo.
+       Precisa ser um token separado porque #6D28D9 sobre um cartão escuro dá
+       2.2:1 e some; no tema escuro isto vira o roxo claro (5.8:1). */
+    --brand-accent: var(--brand);
+
+    /* Texto secundário e etiquetas neutras (o "cinza" das tags de estágio,
+       turma e integração desconectada). Derivados, família do neutro escuro. */
+    --muted: #64748B;
+    --muted-soft: #94A3B8;
+    --neutral-bg: #F1F5F9;
+    --neutral-text: #475569;
+
+    /* Balões da conversa: a marca diluída, não uma cor nova. */
+    --bubble-ai: rgba(109, 40, 217, 0.10);
+    --bubble-operator: rgba(109, 40, 217, 0.20);
 }
 
 body.dark {
-    --bg: #1a1a1a;
-    --surface: #242424;
-    --text: #e0e0e0;
-    --input-border: #444444;
+    --bg: #0F172A;             /* Neutro escuro */
+    --surface: #1E293B;        /* derivado: um degrau acima do neutro escuro */
+    --text: #EDE9FE;           /* derivado: roxo claro clareado, para texto */
+    --input-border: #334155;   /* derivado */
+
+    --brand-accent: var(--brand-light);
+
+    --muted: #94A3B8;
+    --muted-soft: #64748B;
+    --neutral-bg: #334155;
+    --neutral-text: #CBD5E1;
+
+    /* Mais opacidade que no tema claro: 10% de roxo sobre um cartão escuro é
+       invisível. */
+    --bubble-ai: rgba(167, 139, 250, 0.14);
+    --bubble-operator: rgba(167, 139, 250, 0.26);
 }
 
 body {
@@ -26,7 +79,7 @@ body {
     top: 1rem;
     right: 1rem;
     background: none;
-    border: 1px solid #aaa;
+    border: 1px solid var(--input-border);
     color: var(--text);
     border-radius: 20px;
     padding: 0.3rem 0.8rem;

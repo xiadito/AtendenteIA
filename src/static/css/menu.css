@@ -52,11 +52,11 @@ h1 {
 /* O tile de primeiros passos, enquanto houver pendência. Borda na cor da marca
    para puxar o olho sem virar alerta vermelho — é uma tarefa, não um erro. */
 .menu-item-pending {
-    border-color: var(--brand);
+    border-color: var(--brand-accent);
 }
 
 .menu-item:hover {
-    border-color: var(--brand);
+    border-color: var(--brand-accent);
     transform: translateY(-2px);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
 }
@@ -128,7 +128,7 @@ h1 {
     display: inline-block;
     margin-top: 1rem;
     font-size: 0.85rem;
-    color: var(--brand);
+    color: var(--brand-accent);
     text-decoration: none;
 }
 

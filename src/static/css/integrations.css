@@ -18,7 +18,7 @@ body {
     display: inline-block;
     margin-bottom: 1rem;
     font-size: 0.85rem;
-    color: #888;
+    color: var(--muted);
     text-decoration: none;
 }
 
@@ -43,26 +43,26 @@ p { color: var(--text); }
 }
 
 .badge-connected       { background: #d4edda; color: #155724; } /* green  */
-.badge-disconnected    { background: #f0f0f0; color: #666666; } /* gray   */
+.badge-disconnected    { background: var(--neutral-bg); color: var(--neutral-text); } /* gray   */
 .badge-needs-reconnect { background: #fff3cd; color: #856404; } /* yellow */
 
 .btn-action {
     background: none;
-    border: 1px solid #aaa;
-    color: #555;
+    border: 1px solid var(--input-border);
+    color: var(--text);
     padding: 0.5rem 1rem;
     border-radius: 4px;
     font-size: 0.9rem;
     cursor: pointer;
 }
 
-.btn-action:hover  { background: #f0f0f0; }
+.btn-action:hover  { background: var(--neutral-bg); }
 .btn-action.danger { border-color: #c0392b; color: #c0392b; }
 .btn-action.danger:hover { background: #fdf0ef; }
 
 .empty-state {
     text-align: center;
-    color: #aaa;
+    color: var(--muted-soft);
     font-size: 0.9rem;
 }
 

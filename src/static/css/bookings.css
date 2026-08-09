@@ -22,7 +22,7 @@ body {
     display: inline-block;
     margin-bottom: 1rem;
     font-size: 0.85rem;
-    color: #888;
+    color: var(--muted);
     text-decoration: none;
 }
 
@@ -87,7 +87,7 @@ h1 {
    lateral é o sinal que se lê antes de qualquer texto (mesma ideia da conversa
    pausada no inbox). */
 .booking-row.pending {
-    border-left: 3px solid var(--brand);
+    border-left: 3px solid var(--brand-accent);
 }
 
 .row-main {
@@ -135,7 +135,7 @@ h1 {
     font-weight: 600;
 }
 
-.tag-class        { background: #f0f0f0; color: #666666; }  /* cinza    */
+.tag-class        { background: var(--neutral-bg); color: var(--neutral-text); }  /* cinza    */
 .status-pending   { background: #fff3cd; color: #856404; }  /* amarelo  */
 .status-confirmed { background: #d4edda; color: #155724; }  /* verde    */
 .status-cancelled { background: #f8d7da; color: #721c24; }  /* vermelho */
@@ -159,7 +159,7 @@ h1 {
 
 .btn-confirm {
     background: var(--brand);
-    color: #ffffff;
+    color: var(--on-brand);
 }
 
 /* Cancelar é destrutivo: fica com o peso de uma ação secundária, para não

@@ -24,7 +24,7 @@ body {
     display: inline-block;
     margin-bottom: 1rem;
     font-size: 0.85rem;
-    color: #888;
+    color: var(--muted);
     text-decoration: none;
 }
 
@@ -118,7 +118,7 @@ h1 {
 .field textarea:focus,
 .field select:focus {
     outline: none;
-    border-color: var(--brand);
+    border-color: var(--brand-accent);
 }
 
 .field-hint {
@@ -131,7 +131,7 @@ h1 {
 
 .btn-save {
     background: var(--brand);
-    color: #ffffff;
+    color: var(--on-brand);
     border: 1px solid transparent;
     border-radius: 6px;
     padding: 0.5rem 1.1rem;
@@ -166,7 +166,7 @@ h1 {
 
 .status-connected    { background: #d4edda; color: #155724; }  /* verde    */
 .status-reconnect    { background: #fff3cd; color: #856404; }  /* amarelo  */
-.status-disconnected { background: #f0f0f0; color: #666666; }  /* cinza    */
+.status-disconnected { background: var(--neutral-bg); color: var(--neutral-text); }  /* cinza    */
 
 .integration-email {
     font-size: 0.82rem;
@@ -176,7 +176,7 @@ h1 {
 
 .integration-link {
     font-size: 0.82rem;
-    color: var(--brand);
+    color: var(--brand-accent);
     text-decoration: none;
     font-weight: 600;
 }
@@ -201,7 +201,7 @@ h1 {
 }
 
 .class-type-row.is-fallback {
-    border-color: var(--brand);
+    border-color: var(--brand-accent);
 }
 
 .class-type-head {
@@ -213,14 +213,14 @@ h1 {
 }
 
 .tag-marker {
-    background: #f0f0f0;
-    color: #666666;
+    background: var(--neutral-bg);
+    color: var(--neutral-text);
     font-family: ui-monospace, "Cascadia Code", "Source Code Pro", monospace;
 }
 
 .tag-fallback {
     background: var(--brand);
-    color: #ffffff;
+    color: var(--on-brand);
 }
 
 /* Os três campos de uma turma cabem lado a lado numa tela larga e empilham
@@ -274,7 +274,7 @@ h1 {
     transition: border-color 0.15s, color 0.15s;
 }
 
-.btn-secondary:hover { border-color: var(--brand); color: var(--brand); }
+.btn-secondary:hover { border-color: var(--brand-accent); color: var(--brand-accent); }
 .btn-danger:hover    { border-color: #c0392b; color: #c0392b; }
 
 .class-type-new,
