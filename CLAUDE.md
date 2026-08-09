@@ -12,10 +12,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 >
 > **`SIGNUP_ENABLED` now defaults to `true`** — the founder opened the door once the isolation was
 > in place. The flag was never a feature toggle; it was a safety interlock, and S3b left it with
-> nothing to protect. **It still does not make a signup into a working gym:** a new tenant receives
-> no WhatsApp message until its Twilio Sender is approved by hand and `whatsapp_number` is set,
-> which is the last, buttonless line of `/dashboard/onboarding`. An environment that wants the
-> door shut must now say `SIGNUP_ENABLED="false"` explicitly.
+> nothing to protect. **It still does not make a signup into a working gym:** a new tenant neither
+> receives nor sends a WhatsApp message until its Twilio Sender is approved by hand and
+> `whatsapp_number` is set — the last line of `/dashboard/onboarding`, which since Module S3d has
+> a button (the owner types the number in `/dashboard/settings`) but still waits on the Sender
+> approval only the founder can do. An environment that wants the door shut must now say
+> `SIGNUP_ENABLED="false"` explicitly.
 >
 > **What is still shared across tenants, deliberately:** the `owner_notifications` queue (drained
 > globally by the cron, resolved per row), `signup_attempts` (a system-wide throttle), and
@@ -718,6 +720,7 @@ A login-protected web dashboard is available at `/dashboard/menu`. Routes are de
 | `/dashboard/settings` | GET | Settings screen — AI, classes and account sections |
 | `/dashboard/settings/ai` | POST | Saves the customizable prompt layer (`ai_configs`) |
 | `/dashboard/settings/account` | POST | Saves `owners.owner_phone`, behind two guards |
+| `/dashboard/settings/whatsapp-number` | POST | Saves `owners.whatsapp_number` — the gym's own line (Module S3d) |
 | `/dashboard/settings/class-types` | POST | Registers a class type |
 | `/dashboard/settings/class-types/<marker>` | POST | Saves a class type's label, capacity and child-name flag |
 | `/dashboard/settings/class-types/<marker>/fallback` | POST | Makes it the tenant's fallback class type |
@@ -1106,6 +1109,65 @@ them — see below. The keyword-with-a-default shape survives, and note that a *
 saved by it, since the caller is what passes the argument: that is what broke
 `test_owner_notifications`' fakes in S3a, and `test_ai_action`'s and `test_class_types`' in S3b.
 
+**And it only resolved the tenant on the way IN — Module S3d supplied the way out.** See below.
+
+### Sending From the Gym's Own Number (Module S3d)
+
+The other half of the routing S3a started, and the module that makes a second gym's WhatsApp
+channel actually work. S3a made the `To` field identify the gym on the way **in**;
+`whatsapp/whatsapp_service.py` sent every reply from one number read from the environment on the
+way **out**. A gym recognized by its own line and answering from another is not a cosmetic
+mismatch: the lead replies to the number they were written from, and that message lands in
+whichever tenant owns it. The routing was right inbound and wrong outbound.
+
+**`resolve_sender_number(tenant_id)` is the whole module.** It reads
+`store.get_whatsapp_number(tenant_id)` and returns `whatsapp:+{digits}`; `send_message(to, text,
+tenant_id=…)` calls it for `from_`. There is no migration — the column has existed since 009.
+
+**The fallback is the sandbox, and it belongs to the pilot alone.** Tenant `'default'` with no
+number falls back to `Config.TWILIO_SANDBOX_NUMBER` with a `WARNING`, which reproduces the
+pre-S3d behaviour byte for byte. **Any other tenant with no number raises
+`SenderNotConfiguredError`.** Note the deliberate asymmetry with the inbound side:
+`resolve_tenant_by_whatsapp_number()` never blocks a message, because losing a lead who already
+wrote is worse than handling them as the pilot's — outbound, the trade inverts, since a message
+sent from the wrong line cannot be recalled and redirects the lead's next reply to another gym.
+
+**Where the resolution happens, and why not in the callers.** `whatsapp/` gains an import of
+`integrations/store` — a new package edge, in the same direction `bot/` → `integrations/` already
+goes, with no cycle. The alternative (each caller resolves its own `from_`) would write the
+fallback rule at five sites; that is the mistake `bot/confirmations.py` documents. **No cache**,
+for the reason `bot/class_types.py` has none: one indexed read of one row next to an HTTP
+round-trip to Twilio, and a cache would only buy a window in which the settings screen lies.
+
+**Each of the five call sites already knew its tenant; what differs is the error posture:**
+
+| Call site | Posture |
+|---|---|
+| `bot/handlers.py` (reply to the lead) | Unguarded, as before. The new failure is **unreachable** here: a tenant with no number receives no inbound, so it never gets a turn |
+| `bot/confirmations.py::_notify_lead()` | Already in a `try/except`; becomes `lead_notified: False` |
+| `webhook/routes.py::receive_twilio_owner()` | **Gained a `try/except`.** The one reachable point — on the sandbox path the owner is found by the *global* scan, so gym B's owner arrives with a tenant that may have no number. Unguarded, the exception becomes a 500 and Twilio retries the owner's `1` forever |
+| `webhook/routes.py::inbox_reply()` | Catches `SenderNotConfiguredError` **before** the generic handler, so the operator is told to configure the number instead of being told to check the connection and retry forever |
+| `jobs/drain_notifications.py` | Already in a per-row `try/except`; counts an attempt and stops at `MAX_ATTEMPTS` |
+
+**The owner now sets the number from `/dashboard/settings`**, in a form of its own inside the
+"Conta" section — separate from `owner_phone` for the same reason S1 split "IA" from "Conta", and
+more sharply: these are the project's two routing keys with opposite jobs, and one click must not
+rewrite both. The route holds no rules; it calls `provision.try_set_whatsapp_number()`, which is
+`set_whatsapp_number()`'s workhorse split out to return `(bool, str)` so a screen can tell a
+refusal from a success. The founder's CLI is unchanged and remains the other way in. An empty
+field clears the column, which is a legitimate operation: it returns the gym to the sandbox while
+a new Sender is pending.
+
+**Saving a number here does not create the Twilio Sender**, and the field's hint says so. That
+half is still manual and still the founder's — which is why `/dashboard/onboarding`'s last step
+kept its "our team will tell you" wording even though it finally has a button.
+
+Testing: `test_tenant_isolation` scenarios 17-19 (each gym resolves its own `from_`; a numberless
+gym refuses; the lead notice goes out under the booking's tenant) and `test_settings` 11-15 (the
+screen). **`test_settings` snapshots `owners.whatsapp_number` to `/tmp` along with the other two
+columns** — it writes to the pilot's real rows, and a run that left a fixture number behind would
+silently repoint the pilot's whole WhatsApp channel.
+
 ### Per-Tenant Read Isolation (Module S3b)
 
 The module that made a second gym *safe*, and the pair of S3a. S3a established identity and
@@ -1406,7 +1468,7 @@ Defined in `src/.env` and loaded via `config.py`:
 |---|---|
 | `TWILIO_ACCOUNT_SID` | Twilio credentials |
 | `TWILIO_AUTH_TOKEN` | Twilio credentials |
-| `TWILIO_SANDBOX_NUMBER` | Twilio sandbox number (default: `whatsapp:+14155238886`) |
+| `TWILIO_SANDBOX_NUMBER` | Twilio sandbox number (default: `whatsapp:+14155238886`). **Since Module S3d this is the pilot's fallback, not everybody's sender**: outbound messages leave from `owners.whatsapp_number`, and only tenant `'default'` with an empty column falls back here. Any other tenant without a number refuses to send |
 | `VERIFY_TOKEN` | Meta webhook verification token (GET /webhook) |
 | `FLASK_SECRET_KEY` | Flask session secret (required for dashboard auth — Flask-Login signs the session cookie with it) |
 | `DASHBOARD_PASSWORD` | **Seed only, since Module S3a.** Used once, to create the first `users` row when the table is empty; never compared at login afterwards. Needs 8+ characters |
@@ -1508,10 +1570,23 @@ Defined in `src/.env` and loaded via `config.py`:
   `sessions.stage`, and leads come from `MIN(messages.created_at)` and never from
   `conversation_started_at`, which the 1h timeout rewrites. **It does not measure attendance and
   says so on screen** — see problem P1 below. See `src/tests/test_metrics/METRICS_TESTING.md`.
+- **Module S3d (done)** — Outbound sending per tenant (`whatsapp/whatsapp_service.py`,
+  `POST /dashboard/settings/whatsapp-number`). `resolve_sender_number(tenant_id)` reads
+  `owners.whatsapp_number` and becomes Twilio's `from_`, closing the half of S3a's routing that
+  was never built: until this, a gym recognized by its own number still answered from one global
+  line, so the lead's reply would land in another tenant. Tenant `'default'` with an empty column
+  still falls back to the Sandbox — every other tenant refuses to send, which is the reverse of
+  the inbound rule and deliberately so. The owner now types the number on the settings screen, in
+  a form of its own, reusing `provision.try_set_whatsapp_number()`'s guards; the founder's CLI is
+  unchanged. **No migration** — the column has existed since 009. See
+  `src/tests/test_tenant_isolation/TENANT_ISOLATION_TESTING.md` (17-19) and
+  `src/tests/test_settings/SETTINGS_TESTING.md` (11-15).
 - **Future (SaaS phase)** — beyond S4: billing (S5), and the capture moment that would make P1
-  answerable. Also pending: reminders before the class, and multi-operator identity (`users`
+  answerable. Also pending: reminders before the class, multi-operator identity (`users`
   already accepts two rows per tenant, but `messages.author = 'operator'` still cannot say which
-  human replied).
+  human replied), and more than one WhatsApp number per gym (S3d settled on exactly one; a second
+  would need a `tenant_numbers` table and a column on `sessions` remembering which line the lead
+  wrote to).
 
 ## Known Issues / TODOs
 
