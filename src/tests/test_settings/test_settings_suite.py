@@ -11,9 +11,18 @@ through the Flask test client exactly as a logged-in owner would.
 DESTRUCTIVE, AND ON THE PILOT'S OWN ROWS. Unlike the other suites, which write
 fixture rows under their own sender prefix, this one has to overwrite the single
 real row of `ai_configs` and the single real `owners.owner_phone` — those tables
-hold one row per tenant and the pilot is the only tenant. Both are snapshotted to
-BACKUP_PATH before the first write and restored in teardown; a run that dies
-mid-suite is repaired at the start of the next one. Never remove that backup.
+hold one row per tenant and the pilot is the only tenant. All three columns are
+snapshotted to BACKUP_PATH before the first write and restored in teardown; a run
+that dies mid-suite is repaired at the start of the next one. Never remove that
+backup.
+
+SINCE MODULE S3d THE SNAPSHOT ALSO COVERS `owners.whatsapp_number`, and that one
+is the most expensive of the three to lose. It is a ROUTING KEY in both
+directions — it decides which gym an inbound message belongs to AND which number
+every outbound message leaves from — so a run that left a fixture number behind
+would silently point the pilot's whole WhatsApp channel at 5526099999999. Adding
+a scenario that writes a new column of `owners` means adding it to the snapshot
+in the same commit.
 
 Teardown also deletes the sessions rows this run created (prefix 5526000...,
 messages cascade off them).
@@ -53,6 +62,12 @@ SENDER_PREFIX = "5526000"
 
 # Fixture number the suite writes into owners.owner_phone.
 OWNER_PHONE_TEST = "5526099999999"
+
+# Fixture number the suite writes into owners.whatsapp_number (Module S3d). A
+# DIFFERENT number from OWNER_PHONE_TEST on purpose: the two columns are the two
+# routing keys and the guard being tested is precisely that one number cannot be
+# both, so reusing the value would make the happy path collide with the guard.
+WHATSAPP_NUMBER_TEST = "5526088888888"
 
 # Where the pilot's real ai_configs row and owner_phone are snapshotted before
 # the suite overwrites them. Outside the repo so a crashed run never leaves
@@ -278,6 +293,11 @@ def read_owner_phone() -> str | None:
     return owner["owner_phone"]
 
 
+def read_whatsapp_number() -> str | None:
+    """A linha da academia — o "To" que entra e, desde o S3d, o "From" que sai."""
+    return store.get_whatsapp_number()
+
+
 # ---------------------------------------------------------------------------
 # Suite
 # ---------------------------------------------------------------------------
@@ -338,6 +358,12 @@ class SettingsSuite:
             "/dashboard/settings/account", data={"owner_phone": owner_phone}
         )
 
+    def _post_whatsapp_number(self, whatsapp_number: str) -> Any:
+        return self._authenticated_client().post(
+            "/dashboard/settings/whatsapp-number",
+            data={"whatsapp_number": whatsapp_number},
+        )
+
     # -- prerequisites ------------------------------------------------------
 
     def check_schema(self) -> str:
@@ -370,9 +396,13 @@ class SettingsSuite:
             "ai_config": {field: config[field] for field in AI_FIELDS},
             "ai_updated_at": config["updated_at"].isoformat(),
             "owner_phone": read_owner_phone(),
+            # Módulo S3d. Normalmente None (o sandbox), e o None PRECISA ir para o
+            # arquivo: restaurar significa devolver a coluna ao que era, e o que
+            # era é "sem número".
+            "whatsapp_number": read_whatsapp_number(),
         }
         BACKUP_PATH.write_text(json.dumps(self._backup, ensure_ascii=False), encoding="utf-8")
-        return f"ai_configs e owner_phone salvos em {BACKUP_PATH}"
+        return f"ai_configs, owner_phone e whatsapp_number salvos em {BACKUP_PATH}"
 
     # -- tests --------------------------------------------------------------
 
@@ -558,7 +588,7 @@ class SettingsSuite:
         return "as duas seções mostram o estado atual, cada uma com seu próprio POST"
 
     def test_10_routes_require_auth(self) -> str:
-        """As três rotas novas não podem ficar de fora do @require_auth."""
+        """As quatro rotas não podem ficar de fora do @require_auth."""
         if self.app is None:
             self._authenticated_client()
         anonymous = self.app.test_client()
@@ -567,6 +597,7 @@ class SettingsSuite:
             ("get", "/dashboard/settings"),
             ("post", "/dashboard/settings/ai"),
             ("post", "/dashboard/settings/account"),
+            ("post", "/dashboard/settings/whatsapp-number"),
         ]
         for method, path in paths:
             response = getattr(anonymous, method)(path)
@@ -574,7 +605,134 @@ class SettingsSuite:
             expect("/dashboard/login" in response.headers.get("Location", ""),
                    f"{method.upper()} {path} deveria redirecionar para o login")
 
-        return "as três rotas de configurações exigem sessão do painel"
+        return "as quatro rotas de configurações exigem sessão do painel"
+
+    # -- Módulo S3d: o número da academia ------------------------------------
+
+    def test_11_saving_whatsapp_number_persists(self) -> str:
+        """Salvar o número da academia grava normalizado e muda o remetente.
+
+        As duas metades do módulo numa asserção só: a coluna recebe o número em
+        dígitos puros (o formato que find_tenant_by_whatsapp_number compara na
+        ENTRADA) e resolve_sender_number() passa a devolvê-lo como "From" na
+        SAÍDA. Antes do S3d a segunda metade não existia — a academia era
+        reconhecida pelo número dela e respondia pelo do sandbox.
+        """
+        import whatsapp.whatsapp_service as whatsapp_service
+
+        response = self._post_whatsapp_number(f"whatsapp:+{WHATSAPP_NUMBER_TEST}")
+
+        expect_equal(response.status_code, 200, "status do POST")
+        expect_equal(read_whatsapp_number(), WHATSAPP_NUMBER_TEST,
+                     "whatsapp_number gravado em dígitos puros")
+        expect_equal(
+            whatsapp_service.resolve_sender_number(store.DEFAULT_TENANT_ID),
+            f"whatsapp:+{WHATSAPP_NUMBER_TEST}",
+            "o remetente deveria ser o número da academia, não o do sandbox",
+        )
+
+        return f"{WHATSAPP_NUMBER_TEST} gravado e virou o 'From' dos envios"
+
+    def test_12_clearing_whatsapp_number_returns_to_the_sandbox(self) -> str:
+        """Campo vazio limpa a coluna e devolve o piloto ao número de sandbox.
+
+        Operação legítima, não um acidente: enquanto um Sender novo não sai, a
+        academia precisa poder voltar ao número de testes. Vale só para o tenant
+        'default' — ver o cenário do test_tenant_isolation, onde uma academia
+        qualquer sem número passa a RECUSAR o envio em vez de cair no sandbox.
+        """
+        from config import Config
+        import whatsapp.whatsapp_service as whatsapp_service
+
+        self._post_whatsapp_number(WHATSAPP_NUMBER_TEST)
+        expect_equal(read_whatsapp_number(), WHATSAPP_NUMBER_TEST, "pré-condição: número gravado")
+
+        response = self._post_whatsapp_number("")
+
+        expect_equal(response.status_code, 200, "status do POST de limpeza")
+        expect(read_whatsapp_number() is None, "a coluna deveria ter voltado a NULL")
+        expect_equal(
+            whatsapp_service.resolve_sender_number(store.DEFAULT_TENANT_ID),
+            Config.TWILIO_SANDBOX_NUMBER,
+            "sem número, o piloto deveria voltar ao remetente do sandbox",
+        )
+
+        return "campo vazio limpou a coluna; o piloto voltou ao sandbox"
+
+    def test_13_whatsapp_number_refuses_the_owners_own_phone(self) -> str:
+        """Um número não pode ser a linha da academia E o celular do dono.
+
+        São as duas chaves de roteamento, e elas respondem perguntas opostas na
+        MESMA mensagem: whatsapp_number é o "To" (para qual academia escreveram?)
+        e owner_phone é o "From" (quem escreveu, o dono ou um lead?). O mesmo
+        número nos dois papéis faz o webhook ler toda mensagem que chega como se
+        fosse o dono respondendo 1/2.
+        """
+        self._post_phone(OWNER_PHONE_TEST)
+        before = read_whatsapp_number()
+
+        response = self._post_whatsapp_number(OWNER_PHONE_TEST)
+        body = response.get_data(as_text=True)
+
+        expect_equal(response.status_code, 200, "status do POST recusado")
+        expect("telefone pessoal do dono" in body,
+               "a tela deveria explicar que o número já é o do dono")
+        expect_equal(read_whatsapp_number(), before, "a recusa não podia ter gravado")
+
+        return "número do dono recusado como número da academia; coluna intacta"
+
+    def test_14_whatsapp_number_refuses_a_lead_and_bad_input(self) -> str:
+        """Número de lead e formato inválido são recusados sem gravar.
+
+        O caso do lead é o mais perigoso dos dois: a linha da academia é o
+        destino de TODA mensagem que entra, então apontá-la para o número de
+        alguém que já conversa com a academia sequestraria essa conversa.
+        """
+        lead_sender = self.next_sender()
+        session_store.get_session(lead_sender)
+
+        before = read_whatsapp_number()
+
+        response = self._post_whatsapp_number(lead_sender)
+        expect_equal(response.status_code, 200, "status do POST com número de lead")
+        expect("conversa de lead" in response.get_data(as_text=True),
+               "a tela deveria explicar que o número já é de um lead")
+
+        for raw in ("123", "não é telefone"):
+            response = self._post_whatsapp_number(raw)
+            expect_equal(response.status_code, 200, f"status do POST com {raw!r}")
+            expect("Número inválido" in response.get_data(as_text=True),
+                   f"a tela deveria recusar {raw!r}")
+
+        expect_equal(read_whatsapp_number(), before, "nenhuma das recusas podia ter gravado")
+
+        return "lead e duas entradas inválidas recusados; coluna intacta"
+
+    def test_15_the_two_numbers_are_separate_forms(self) -> str:
+        """Salvar um dos números não pode reescrever o outro.
+
+        A regra de forms separados do S1, aplicada ao par mais perigoso da tela.
+        Um formulário só faria o dono que corrige o próprio celular reescrever a
+        linha da academia junto — e vice-versa, o que derrubaria o atendimento.
+        """
+        self._post_phone(OWNER_PHONE_TEST)
+        self._post_whatsapp_number(WHATSAPP_NUMBER_TEST)
+
+        # Reescreve só o celular do dono e confere que a linha da academia ficou.
+        other_owner_phone = self.next_sender()
+        self._post_phone(other_owner_phone)
+        expect_equal(read_whatsapp_number(), WHATSAPP_NUMBER_TEST,
+                     "salvar o telefone do dono não podia mexer no número da academia")
+        expect_equal(read_owner_phone(), other_owner_phone, "o telefone do dono deveria ter mudado")
+
+        response = self._authenticated_client().get("/dashboard/settings")
+        body = response.get_data(as_text=True)
+        expect('action="/dashboard/settings/account"' in body, "formulário da conta ausente")
+        expect('action="/dashboard/settings/whatsapp-number"' in body,
+               "formulário do número da academia ausente")
+        expect(WHATSAPP_NUMBER_TEST in body, "a tela deveria mostrar o número da academia")
+
+        return "os dois números têm POSTs próprios e não se sobrescrevem"
 
     # -- teardown -----------------------------------------------------------
 
@@ -596,7 +754,7 @@ class SettingsSuite:
         BACKUP_PATH.unlink(missing_ok=True)
 
         print(f"  limpeza: {removed_sessions} sessão(ões) de teste removida(s); "
-              f"{'config da IA e owner_phone originais restaurados' if restored else 'nada a restaurar'}.")
+              f"{'config da IA, owner_phone e whatsapp_number restaurados' if restored else 'nada a restaurar'}.")
 
 
 # ---------------------------------------------------------------------------
@@ -647,6 +805,17 @@ def _restore_backup(backup: dict[str, Any] | None) -> bool:
                 "UPDATE owners SET owner_phone = %s, updated_at = NOW() WHERE tenant_id = %s",
                 (backup["owner_phone"], store.DEFAULT_TENANT_ID),
             )
+            # Condicional, não um segundo %s na query acima (Módulo S3d). Um
+            # arquivo órfão escrito por uma versão anterior ao S3d não tem a
+            # chave, e ali `backup.get(...)` devolveria None — que APAGARIA um
+            # número legítimo em vez de restaurá-lo. Chave ausente significa "a
+            # suíte não mexeu nessa coluna", e a resposta certa é não mexer.
+            if "whatsapp_number" in backup:
+                cur.execute(
+                    "UPDATE owners SET whatsapp_number = %s, updated_at = NOW() "
+                    "WHERE tenant_id = %s",
+                    (backup["whatsapp_number"], store.DEFAULT_TENANT_ID),
+                )
         conn.commit()
 
     return True
@@ -660,7 +829,7 @@ def _restore_orphan_backup() -> None:
     backup = json.loads(BACKUP_PATH.read_text(encoding="utf-8"))
     _restore_backup(backup)
     BACKUP_PATH.unlink(missing_ok=True)
-    print(f"  config da IA e owner_phone restaurados a partir de {BACKUP_PATH}")
+    print(f"  config da IA, owner_phone e whatsapp_number restaurados a partir de {BACKUP_PATH}")
 
 
 def main() -> None:
@@ -693,7 +862,7 @@ def main() -> None:
 
     report.section("Preparo")
     atexit.register(suite.teardown)
-    if not report.run("F1", "Config da IA e owner_phone reais salvos para restauração",
+    if not report.run("F1", "Config da IA, owner_phone e whatsapp_number reais salvos",
                       suite.prepare_fixtures):
         print(console.red("\n Sem backup a suíte não pode rodar: ela sobrescreve os dados reais."))
         atexit.unregister(suite.teardown)
@@ -722,6 +891,16 @@ def main() -> None:
          suite.test_09_get_shows_current_state),
         ("10", "As rotas de configurações exigem autenticação",
          suite.test_10_routes_require_auth),
+        ("11", "Salvar o número da academia grava e vira o remetente dos envios",
+         suite.test_11_saving_whatsapp_number_persists),
+        ("12", "Limpar o número devolve o piloto ao remetente do sandbox",
+         suite.test_12_clearing_whatsapp_number_returns_to_the_sandbox),
+        ("13", "O número da academia não pode ser o celular do dono",
+         suite.test_13_whatsapp_number_refuses_the_owners_own_phone),
+        ("14", "Número de lead e formato inválido recusados sem gravar",
+         suite.test_14_whatsapp_number_refuses_a_lead_and_bad_input),
+        ("15", "Os dois números são formulários separados e não se sobrescrevem",
+         suite.test_15_the_two_numbers_are_separate_forms),
     ]
     for step, title, test in tests:
         report.run(step, title, test)

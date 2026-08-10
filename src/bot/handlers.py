@@ -205,8 +205,15 @@ def handle_text_message(
         except Exception:
             logger.exception("Failed to enqueue owner notification for %s; message will still be sent.", sender)
 
-    # 8. Send.
-    whatsapp_service.send_message(sender, outgoing)
+    # 8. Send, from THIS gym's own WhatsApp number (Module S3d).
+    #
+    #    Unguarded, as it always was: a Twilio failure here answers Twilio with a
+    #    500 and Twilio retries, which is the behaviour this route has had since
+    #    Module 3. S3d's new failure — a tenant with no whatsapp_number — cannot
+    #    reach this line: without a registered number nothing routes to that
+    #    tenant in the first place (receive_twilio falls back to 'default'), so
+    #    the only tenants that get here are the pilot and gyms that have a number.
+    whatsapp_service.send_message(sender, outgoing, tenant_id=tenant_id)
 
 
 #
