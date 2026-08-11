@@ -23,6 +23,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 > globally by the cron, resolved per row), `signup_attempts` (a system-wide throttle), and
 > `products` (grocery-store legacy, read only by `sync_agent/`).
 
+## Regras de documentação (siga sempre)
+
+Este projeto trata documentação como parte da mudança, não como um passo opcional depois. Três
+regras, sem exceção:
+
+1. **Toda modificação de código termina com uma atualização do `CLAUDE.md`.** Se a mudança
+   altera comportamento, schema, rotas, variáveis de ambiente, ou qualquer decisão que este
+   arquivo já documenta, atualize a seção correspondente (ou crie uma nova, seguindo o estilo
+   das existentes) como parte do mesmo trabalho — não depois, não só se perguntarem.
+2. **Todo teste novo precisa de três coisas, não de uma:**
+   - Uma entrada no `CLAUDE.md` (a suíte, o que ela cobre, qualquer decisão não óbvia).
+   - Um roteiro `*_TESTING.md` próprio na pasta do módulo, seguindo o formato dos roteiros já
+     existentes (cenário em português + o que provaria o contrário).
+   - A tabela de suítes em [src/tests/Tests.md](src/tests/Tests.md) atualizada — a lista de
+     pastas, o prefixo de telefone reservado, e a contagem de testes em "Rodando tudo" se ela
+     mudar.
+3. **`README.md` é atualizado quando a mudança é substancial** — nova forma de criar conta, novo
+   fluxo de configuração, mudança em algo que o README já explica passo a passo. Uma mudança
+   interna sem efeito no fluxo do usuário não precisa mexer nele.
+
 ## Development Commands
 
 The app runs from the `src/` directory, but `requirements.txt` lives at the **repo root**:
